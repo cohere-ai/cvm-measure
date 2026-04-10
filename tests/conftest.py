@@ -56,3 +56,13 @@ def ccel_data_a3() -> bytes:
     if not path.exists():
         pytest.skip(f"CCEL fixture not found: {path}")
     return path.read_bytes()
+
+
+@pytest.fixture
+def baseline_a3():
+    from cvm_measure.tdx.baseline import load
+
+    path = FIXTURES_DIR / "baselines" / "a3-highgpu-1g.json"
+    if not path.exists():
+        pytest.skip(f"Baseline fixture not found: {path}")
+    return load(path)
