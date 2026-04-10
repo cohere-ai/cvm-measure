@@ -1,0 +1,30 @@
+"""Unit tests: CCEL event log parser."""
+
+from __future__ import annotations
+
+import pytest
+
+from cvm_measure.tdx.ccel import TPM_ALG_SHA384, parse_event_log
+
+
+class TestCCELParser:
+
+    def test_parse_spec_id(self, ccel_data_a3: bytes) -> None:
+        log = parse_event_log(ccel_data_a3)
+        assert log.spec_id is not None
+        assert len(log.spec_id.digest_sizes) > 0
+
+    def test_all_events_have_sha384(self, ccel_data_a3: bytes) -> None:
+        log = parse_event_log(ccel_data_a3)
+        for event in log.measurable_events:
+            d = event.get_digest(TPM_ALG_SHA384)
+            assert d is not None, f"Event {event.index} missing SHA-384 digest"
+            assert len(d.hash) == 48
+
+    def test_parse_empty_raises(self) -> None:
+        with pytest.raises(ValueError, match="too short"):
+            parse_event_log(b"")
+
+    def test_parse_too_small_raises(self) -> None:
+        with pytest.raises(ValueError, match="too short"):
+            parse_event_log(b"\x00" * 16)
