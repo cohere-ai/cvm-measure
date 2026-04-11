@@ -76,6 +76,23 @@ def _add_compute_args(parser: argparse.ArgumentParser) -> None:
         help="What to compute: 'all' (default) or 'mrtd' only",
     )
     parser.add_argument("--rtmr3", type=str, default=None, help="Pre-computed RTMR[3] hex (96 chars)")
+    parser.add_argument("--initdata", type=Path, default=None, help="Path to initdata TOML; computes RTMR[3] automatically (mutually exclusive with --rtmr3)")
+
+
+def _resolve_rtmr3(args: argparse.Namespace, parser: argparse.ArgumentParser) -> str | None:
+    """Resolve RTMR[3] from --initdata or --rtmr3 (mutually exclusive)."""
+    if args.initdata is not None and args.rtmr3 is not None:
+        parser.error("--initdata and --rtmr3 are mutually exclusive")
+
+    if args.initdata is not None:
+        from .tdx.initdata import compute_digest
+        from .tdx.rtmr import SHA384_SIZE, extend_rtmr
+
+        digest = compute_digest(args.initdata)
+        rtmr3 = extend_rtmr(bytes(SHA384_SIZE), digest)
+        return rtmr3.hex()
+
+    return args.rtmr3
 
 
 def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
@@ -102,6 +119,8 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
     if args.baseline is None:
         parser.error("--baseline is required for full computation (use --mode mrtd to compute MRTD only)")
 
+    rtmr3_hex = _resolve_rtmr3(args, parser)
+
     from .tdx import compute_all_registers, load_baseline
 
     uki = args.uki.read_bytes()
@@ -114,7 +133,7 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
         ram_gib=args.ram,
         numa_nodes=args.numa_nodes,
         max_per_node_gib=args.max_per_node,
-        rtmr3_hex=args.rtmr3,
+        rtmr3_hex=rtmr3_hex,
     )
 
     print(f"mrtd:  {regs.mrtd}")
