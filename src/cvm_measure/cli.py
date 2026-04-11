@@ -77,6 +77,12 @@ def _add_compute_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--rtmr3", type=str, default=None, help="Pre-computed RTMR[3] hex (96 chars)")
     parser.add_argument("--initdata", type=Path, default=None, help="Path to initdata TOML; computes RTMR[3] automatically (mutually exclusive with --rtmr3)")
+    parser.add_argument(
+        "--output-format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format: 'text' (default) or 'json'",
+    )
 
 
 def _resolve_rtmr3(args: argparse.Namespace, parser: argparse.ArgumentParser) -> str | None:
@@ -111,7 +117,7 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
             numa_nodes=args.numa_nodes,
             max_per_node_gib=args.max_per_node,
         )
-        print(f"mrtd:  {result}")
+        _output_registers({"mrtd": result}, args.output_format)
         return
 
     if args.uki is None:
@@ -136,11 +142,16 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
         rtmr3_hex=rtmr3_hex,
     )
 
-    print(f"mrtd:  {regs.mrtd}")
-    print(f"rtmr0: {regs.rtmr0}")
-    print(f"rtmr1: {regs.rtmr1}")
-    print(f"rtmr2: {regs.rtmr2}")
-    print(f"rtmr3: {regs.rtmr3}")
+    _output_registers(regs.as_dict(), args.output_format)
+
+
+def _output_registers(data: dict[str, str], fmt: str) -> None:
+    if fmt == "json":
+        import json
+        print(json.dumps(data, indent=2))
+    else:
+        for key, value in data.items():
+            print(f"{key}:  {value}" if key == "mrtd" else f"{key}: {value}")
 
 
 def _cmd_extract_baseline(args: argparse.Namespace) -> None:

@@ -91,6 +91,26 @@ class TestCLIInitdata:
             _resolve_rtmr3(args, parser)
 
 
+class TestCLIOutputFormat:
+
+    def test_output_format_json(self, capsys) -> None:
+        from cvm_measure.cli import _output_registers
+        data = {"mrtd": "aa" * 48, "rtmr0": "bb" * 48}
+        _output_registers(data, "json")
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["mrtd"] == "aa" * 48
+        assert parsed["rtmr0"] == "bb" * 48
+
+    def test_output_format_text(self, capsys) -> None:
+        from cvm_measure.cli import _output_registers
+        data = {"mrtd": "aa" * 48, "rtmr0": "bb" * 48}
+        _output_registers(data, "text")
+        out = capsys.readouterr().out
+        assert "mrtd:" in out
+        assert "rtmr0:" in out
+
+
 class TestCLIReplay:
 
     def test_replay(self, ccel_data_a3, golden_a3, tmp_path, capsys) -> None:
