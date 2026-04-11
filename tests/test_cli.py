@@ -58,6 +58,59 @@ class TestCLIExtractBaseline:
         assert data["machine_type"] == "test-type"
 
 
+class TestCLIInitdata:
+
+    def test_initdata_computes_rtmr3(self, tmp_path, capsys) -> None:
+        """--initdata should produce a non-zero RTMR[3] matching the extend(zeros, sha384(file))."""
+        import hashlib
+        from cvm_measure.tdx.rtmr import SHA384_SIZE
+
+        toml_content = b'version = "0.1.0"\nalgorithm = "sha384"\n\n[data]\n"policy.rego" = \'\'\'package agent_policy\ndefault AllowRequestsFailingPolicy := false\n\'\'\'\n'
+        initdata_path = tmp_path / "initdata.toml"
+        initdata_path.write_bytes(toml_content)
+
+        digest = hashlib.sha384(toml_content).digest()
+        expected_rtmr3 = hashlib.sha384(bytes(SHA384_SIZE) + digest).hexdigest()
+
+        from cvm_measure.cli import _resolve_rtmr3
+        import argparse
+        args = argparse.Namespace(initdata=initdata_path, rtmr3=None)
+        parser = argparse.ArgumentParser()
+        result = _resolve_rtmr3(args, parser)
+        assert result == expected_rtmr3
+
+    def test_initdata_and_rtmr3_mutually_exclusive(self, tmp_path) -> None:
+        initdata_path = tmp_path / "initdata.toml"
+        initdata_path.write_bytes(b'version = "0.1.0"\nalgorithm = "sha384"\n[data]\n')
+
+        from cvm_measure.cli import _resolve_rtmr3
+        import argparse
+        args = argparse.Namespace(initdata=initdata_path, rtmr3="ab" * 48)
+        parser = argparse.ArgumentParser()
+        with pytest.raises(SystemExit):
+            _resolve_rtmr3(args, parser)
+
+
+class TestCLIOutputFormat:
+
+    def test_output_format_json(self, capsys) -> None:
+        from cvm_measure.cli import _output_registers
+        data = {"mrtd": "aa" * 48, "rtmr0": "bb" * 48}
+        _output_registers(data, "json")
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["mrtd"] == "aa" * 48
+        assert parsed["rtmr0"] == "bb" * 48
+
+    def test_output_format_text(self, capsys) -> None:
+        from cvm_measure.cli import _output_registers
+        data = {"mrtd": "aa" * 48, "rtmr0": "bb" * 48}
+        _output_registers(data, "text")
+        out = capsys.readouterr().out
+        assert "mrtd:" in out
+        assert "rtmr0:" in out
+
+
 class TestCLIReplay:
 
     def test_replay(self, ccel_data_a3, golden_a3, tmp_path, capsys) -> None:
