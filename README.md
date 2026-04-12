@@ -1,5 +1,11 @@
 # cvm-measure
 
+![](banner.png)
+
+[![CI](https://github.com/cohere-ai/cvm-measure/actions/workflows/ci.yaml/badge.svg)](https://github.com/cohere-ai/cvm-measure/actions/workflows/ci.yaml)
+[![PyPI](https://img.shields.io/pypi/v/cvm-measure)](https://pypi.org/project/cvm-measure/)
+![License](https://img.shields.io/github/license/cohere-ai/cvm-measure)
+
 Compute expected Intel TDX register values (MRTD + RTMR[0-3]) from published inputs, entirely offline.
 
 `cvm-measure` is the TDX equivalent of [sev-snp-measure](https://github.com/virtee/sev-snp-measure) for AMD SEV-SNP. It takes firmware, UKI, baseline, and RAM topology as inputs and produces the hex register values that a correctly-launched CVM should report.
