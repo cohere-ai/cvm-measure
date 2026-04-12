@@ -4,7 +4,7 @@ Usage:
     cvm-measure tdx --firmware OVMF.fd --uki BOOTX64.EFI --baseline baseline.json --ram 234
     cvm-measure tdx --firmware OVMF.fd --ram 234 --mode mrtd
     cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type a3-highgpu-1g -o baseline.json
-    cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type Standard_DC4as_v5 --provider azure
+    cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type a3-highgpu-1g --firmware-sha384 abc...def
     cvm-measure tdx replay --ccel ccel.bin
 """
 
@@ -39,6 +39,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     eb_parser.add_argument("--ccel", required=True, type=Path, help="Path to CCEL binary")
     eb_parser.add_argument("--machine-type", required=True, help="Machine type label (e.g. a3-highgpu-1g)")
+    eb_parser.add_argument("--firmware-sha384", type=str, default=None, help="SHA-384 of OVMF firmware binary (set in baseline if provided)")
     eb_parser.add_argument("--provider", type=str, default=None, help="Cloud provider (auto-detected from machine type if omitted)")
     eb_parser.add_argument("--platform", type=str, default=None, help="TEE platform (auto-set to 'tdx' if omitted)")
     eb_parser.add_argument("-o", "--output", type=Path, default=None, help="Output JSON path (default: stdout)")
@@ -165,6 +166,8 @@ def _cmd_extract_baseline(args: argparse.Namespace) -> None:
     ccel_data = args.ccel.read_bytes()
     baseline = extract_from_ccel(ccel_data, args.machine_type)
 
+    if args.firmware_sha384 is not None:
+        baseline.firmware_sha384 = args.firmware_sha384
     if args.provider is not None:
         baseline.provider = args.provider
     if args.platform is not None:

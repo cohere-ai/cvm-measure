@@ -111,6 +111,38 @@ class TestCLIExtractBaseline:
         assert data["provider"] == "gcp"
         assert data["platform"] == "sev-snp"
 
+    def test_extract_baseline_firmware_sha384(self, ccel_data_a3, tmp_path, capsys) -> None:
+        ccel_path = tmp_path / "ccel.bin"
+        ccel_path.write_bytes(ccel_data_a3)
+        fw_sha = "aa" * 48
+
+        main([
+            "tdx", "extract-baseline",
+            "--ccel", str(ccel_path),
+            "--machine-type", "a3-highgpu-1g",
+            "--firmware-sha384", fw_sha,
+        ])
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["firmware_sha384"] == fw_sha
+
+    def test_extract_baseline_firmware_sha384_to_file(self, ccel_data_a3, tmp_path) -> None:
+        ccel_path = tmp_path / "ccel.bin"
+        ccel_path.write_bytes(ccel_data_a3)
+        out_path = tmp_path / "baseline.json"
+        fw_sha = "bb" * 48
+
+        main([
+            "tdx", "extract-baseline",
+            "--ccel", str(ccel_path),
+            "--machine-type", "a3-highgpu-1g",
+            "--firmware-sha384", fw_sha,
+            "-o", str(out_path),
+        ])
+
+        data = json.loads(out_path.read_text())
+        assert data["firmware_sha384"] == fw_sha
+
 
 class TestCLIInitdata:
 
