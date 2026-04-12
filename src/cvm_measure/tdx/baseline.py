@@ -51,6 +51,16 @@ class BaselineEvent:
     digest: str  # SHA-384 hex
 
 
+def _infer_provider(machine_type: str) -> str:
+    """Infer cloud provider from machine type naming conventions."""
+    mt = machine_type.lower()
+    if mt.startswith("standard_") or mt.startswith("standard "):
+        return "azure"
+    if "." in mt and any(mt.endswith(s) for s in (".metal", ".xlarge", ".large", ".medium", ".small", ".micro", ".nano")):
+        return "aws"
+    return "gcp"
+
+
 @dataclass
 class Baseline:
     """Non-computable event digests for a specific machine type.
@@ -62,6 +72,8 @@ class Baseline:
     machine_type: str
     firmware_sha384: str = ""
     secureboot_enabled: bool = False
+    provider: str = ""
+    platform: str = ""
     events: list[BaselineEvent] = field(default_factory=list)
 
     def rtmr_events(self, rtmr: int) -> list[BaselineEvent]:
@@ -76,18 +88,23 @@ def load(path: Path) -> Baseline:
         machine_type=data["machine_type"],
         firmware_sha384=data.get("firmware_sha384", ""),
         secureboot_enabled=data.get("secureboot_enabled", False),
+        provider=data.get("provider", ""),
+        platform=data.get("platform", ""),
         events=events,
     )
 
 
 def save(baseline: Baseline, path: Path) -> None:
     """Save a baseline to a JSON file."""
-    data = {
-        "machine_type": baseline.machine_type,
-        "firmware_sha384": baseline.firmware_sha384,
-        "secureboot_enabled": baseline.secureboot_enabled,
-        "events": [asdict(e) for e in baseline.events],
-    }
+    data: dict = {}
+    if baseline.provider:
+        data["provider"] = baseline.provider
+    if baseline.platform:
+        data["platform"] = baseline.platform
+    data["machine_type"] = baseline.machine_type
+    data["firmware_sha384"] = baseline.firmware_sha384
+    data["secureboot_enabled"] = baseline.secureboot_enabled
+    data["events"] = [asdict(e) for e in baseline.events]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
 
@@ -159,7 +176,11 @@ def extract_from_ccel(
     pre-hashed digests.
     """
     log = parse_event_log(ccel_data)
-    baseline = Baseline(machine_type=machine_type)
+    baseline = Baseline(
+        machine_type=machine_type,
+        provider=_infer_provider(machine_type),
+        platform="tdx",
+    )
 
     for event in log.measurable_events:
         if event.imr_index != 0 or event.event_type != EV_EFI_VARIABLE_DRIVER_CONFIG:

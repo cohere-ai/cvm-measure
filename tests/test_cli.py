@@ -39,6 +39,8 @@ class TestCLIExtractBaseline:
         out = capsys.readouterr().out
         data = json.loads(out)
         assert data["machine_type"] == "a3-highgpu-1g"
+        assert data["provider"] == "gcp"
+        assert data["platform"] == "tdx"
         assert "events" in data
         assert len(data["events"]) > 0
 
@@ -56,6 +58,58 @@ class TestCLIExtractBaseline:
 
         data = json.loads(out_path.read_text())
         assert data["machine_type"] == "test-type"
+        assert data["provider"] == "gcp"
+        assert data["platform"] == "tdx"
+
+    def test_extract_baseline_infers_azure(self, ccel_data_a3, tmp_path, capsys) -> None:
+        ccel_path = tmp_path / "ccel.bin"
+        ccel_path.write_bytes(ccel_data_a3)
+
+        main(["tdx", "extract-baseline", "--ccel", str(ccel_path), "--machine-type", "Standard_DC4as_v5"])
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["provider"] == "azure"
+        assert data["platform"] == "tdx"
+
+    def test_extract_baseline_infers_aws(self, ccel_data_a3, tmp_path, capsys) -> None:
+        ccel_path = tmp_path / "ccel.bin"
+        ccel_path.write_bytes(ccel_data_a3)
+
+        main(["tdx", "extract-baseline", "--ccel", str(ccel_path), "--machine-type", "m7i.metal"])
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["provider"] == "aws"
+        assert data["platform"] == "tdx"
+
+    def test_extract_baseline_provider_override(self, ccel_data_a3, tmp_path, capsys) -> None:
+        ccel_path = tmp_path / "ccel.bin"
+        ccel_path.write_bytes(ccel_data_a3)
+
+        main([
+            "tdx", "extract-baseline",
+            "--ccel", str(ccel_path),
+            "--machine-type", "a3-highgpu-1g",
+            "--provider", "custom-cloud",
+        ])
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["provider"] == "custom-cloud"
+        assert data["platform"] == "tdx"
+
+    def test_extract_baseline_platform_override(self, ccel_data_a3, tmp_path, capsys) -> None:
+        ccel_path = tmp_path / "ccel.bin"
+        ccel_path.write_bytes(ccel_data_a3)
+
+        main([
+            "tdx", "extract-baseline",
+            "--ccel", str(ccel_path),
+            "--machine-type", "a3-highgpu-1g",
+            "--platform", "sev-snp",
+        ])
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["provider"] == "gcp"
+        assert data["platform"] == "sev-snp"
 
 
 class TestCLIInitdata:

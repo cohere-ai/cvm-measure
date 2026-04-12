@@ -4,6 +4,7 @@ Usage:
     cvm-measure tdx --firmware OVMF.fd --uki BOOTX64.EFI --baseline baseline.json --ram 234
     cvm-measure tdx --firmware OVMF.fd --ram 234 --mode mrtd
     cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type a3-highgpu-1g -o baseline.json
+    cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type Standard_DC4as_v5 --provider azure
     cvm-measure tdx replay --ccel ccel.bin
 """
 
@@ -38,6 +39,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     eb_parser.add_argument("--ccel", required=True, type=Path, help="Path to CCEL binary")
     eb_parser.add_argument("--machine-type", required=True, help="Machine type label (e.g. a3-highgpu-1g)")
+    eb_parser.add_argument("--provider", type=str, default=None, help="Cloud provider (auto-detected from machine type if omitted)")
+    eb_parser.add_argument("--platform", type=str, default=None, help="TEE platform (auto-set to 'tdx' if omitted)")
     eb_parser.add_argument("-o", "--output", type=Path, default=None, help="Output JSON path (default: stdout)")
 
     # -- tdx replay ------------------------------------------------------------
@@ -162,17 +165,25 @@ def _cmd_extract_baseline(args: argparse.Namespace) -> None:
     ccel_data = args.ccel.read_bytes()
     baseline = extract_from_ccel(ccel_data, args.machine_type)
 
+    if args.provider is not None:
+        baseline.provider = args.provider
+    if args.platform is not None:
+        baseline.platform = args.platform
+
     if args.output is not None:
         save(baseline, args.output)
         print(f"Baseline written to {args.output}", file=sys.stderr)
     else:
         from dataclasses import asdict
-        data = {
-            "machine_type": baseline.machine_type,
-            "firmware_sha384": baseline.firmware_sha384,
-            "secureboot_enabled": baseline.secureboot_enabled,
-            "events": [asdict(e) for e in baseline.events],
-        }
+        data: dict = {}
+        if baseline.provider:
+            data["provider"] = baseline.provider
+        if baseline.platform:
+            data["platform"] = baseline.platform
+        data["machine_type"] = baseline.machine_type
+        data["firmware_sha384"] = baseline.firmware_sha384
+        data["secureboot_enabled"] = baseline.secureboot_enabled
+        data["events"] = [asdict(e) for e in baseline.events]
         print(json.dumps(data, indent=2))
 
 
