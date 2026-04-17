@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cvm-measure"
+version = "0.1.0"
+description = "Offline computation and verification of Confidential VM measurement registers"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+readme = "README.md"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "mypy",
+    "ruff",
+]
+
+[project.scripts]
+cvm-measure = "cvm_measure.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
