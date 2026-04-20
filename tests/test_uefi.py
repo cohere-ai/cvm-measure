@@ -16,8 +16,6 @@
 
 from __future__ import annotations
 
-import hashlib
-
 from cvm_measure.tdx.uefi import (
     build_uefi_variable_data,
     compute_secureboot_digest,

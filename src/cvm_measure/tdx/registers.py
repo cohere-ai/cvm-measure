@@ -143,14 +143,17 @@ def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:
     digests: list[bytes] = []
     bi = 0
 
-    digests.append(bytes.fromhex(baseline_events[bi].digest)); bi += 1
+    digests.append(bytes.fromhex(baseline_events[bi].digest))
+    bi += 1
     digests.append(cfv_digest)
     digests.append(sb_flag_digest)
     for _ in range(4):
-        digests.append(bytes.fromhex(baseline_events[bi].digest)); bi += 1
+        digests.append(bytes.fromhex(baseline_events[bi].digest))
+        bi += 1
     digests.append(SEPARATOR_DIGEST)
     while bi < len(baseline_events):
-        digests.append(bytes.fromhex(baseline_events[bi].digest)); bi += 1
+        digests.append(bytes.fromhex(baseline_events[bi].digest))
+        bi += 1
 
     return replay_digests(digests).hex()
 

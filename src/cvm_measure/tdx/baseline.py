@@ -45,12 +45,10 @@ from .ccel import (
     EV_EFI_PLATFORM_FIRMWARE_BLOB2,
     EV_EFI_VARIABLE_BOOT,
     EV_EFI_VARIABLE_DRIVER_CONFIG,
-    EV_IPL,
     EV_PLATFORM_CONFIG_FLAGS,
     EV_SEPARATOR,
     TPM_ALG_SHA384,
     EventLogEntry,
-    ParsedEventLog,
     parse_event_log,
 )
 

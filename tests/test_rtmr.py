@@ -17,9 +17,6 @@
 from __future__ import annotations
 
 import hashlib
-import struct
-
-import pytest
 
 from cvm_measure.tdx.rtmr import SHA384_SIZE, extend_rtmr, replay_digests
 

@@ -19,8 +19,6 @@ from __future__ import annotations
 import hashlib
 import struct
 
-import pytest
-
 from cvm_measure.tdx.registers import (
     EFI_ACTION_DIGESTS,
     SEPARATOR_DIGEST,
@@ -82,14 +80,17 @@ class TestRTMR0FromCCEL:
 
         digests = []
         bi = 0
-        digests.append(bytes.fromhex(baseline_events[bi].digest)); bi += 1
+        digests.append(bytes.fromhex(baseline_events[bi].digest))
+        bi += 1
         digests.append(cfv_event)
         digests.append(compute_secureboot_digest("SecureBoot", sb_flag_data))
         for _ in range(4):
-            digests.append(bytes.fromhex(baseline_events[bi].digest)); bi += 1
+            digests.append(bytes.fromhex(baseline_events[bi].digest))
+            bi += 1
         digests.append(SEPARATOR_DIGEST)
         while bi < len(baseline_events):
-            digests.append(bytes.fromhex(baseline_events[bi].digest)); bi += 1
+            digests.append(bytes.fromhex(baseline_events[bi].digest))
+            bi += 1
 
         rtmr0 = replay_digests(digests).hex()
         assert rtmr0 == golden_a3.rtmr0
