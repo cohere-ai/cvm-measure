@@ -12,6 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""cvm-measure: compute expected TDX register values from published inputs."""
+"""cvm-measure: compute expected confidential VM register values from published inputs."""
 
 __version__ = "0.1.0"
