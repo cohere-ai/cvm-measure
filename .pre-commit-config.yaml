@@ -1,4 +1,13 @@
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.21.2
     hooks:
@@ -21,3 +30,33 @@ repos:
     hooks:
       - id: bandit
         args: ["-r", "src/"]
+
+  - repo: https://github.com/lucas-c/pre-commit-hooks
+    rev: v1.5.5
+    hooks:
+      - id: insert-license
+        files: \.py$
+        args:
+          - --license-filepath=LICENSE-HEADER
+          - --comment-style=#
+
+  - repo: https://github.com/pypa/pip-audit
+    rev: v2.7.3
+    hooks:
+      - id: pip-audit
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.4.1
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+
+  - repo: local
+    hooks:
+      - id: pytest-cov
+        name: pytest with coverage
+        entry: python3 -m pytest tests/ --cov=cvm_measure --cov-fail-under=80 -q
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true

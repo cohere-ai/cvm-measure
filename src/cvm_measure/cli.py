@@ -1,3 +1,17 @@
+# Copyright 2026 Cohere, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """CLI entry point for cvm-measure.
 
 Usage:
@@ -95,6 +109,8 @@ def _resolve_rtmr3(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         parser.error("--initdata and --rtmr3 are mutually exclusive")
 
     if args.initdata is not None:
+        _require_file(args.initdata, "--initdata")
+
         from .tdx.initdata import compute_digest
         from .tdx.rtmr import SHA384_SIZE, extend_rtmr
 
@@ -105,12 +121,19 @@ def _resolve_rtmr3(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     return args.rtmr3
 
 
+def _require_file(path: Path, flag: str) -> None:
+    if not path.exists():
+        print(f"error: {flag} file not found: {path}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     if args.firmware is None:
         parser.error("--firmware is required")
     if args.ram is None:
         parser.error("--ram is required")
 
+    _require_file(args.firmware, "--firmware")
     firmware = args.firmware.read_bytes()
 
     if args.mode == "mrtd":
@@ -132,6 +155,9 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
     rtmr3_hex = _resolve_rtmr3(args, parser)
 
     from .tdx import compute_all_registers, load_baseline
+
+    _require_file(args.uki, "--uki")
+    _require_file(args.baseline, "--baseline")
 
     uki = args.uki.read_bytes()
     baseline = load_baseline(args.baseline)
@@ -163,6 +189,7 @@ def _cmd_extract_baseline(args: argparse.Namespace) -> None:
 
     from .tdx.baseline import extract_from_ccel, save
 
+    _require_file(args.ccel, "--ccel")
     ccel_data = args.ccel.read_bytes()
     baseline = extract_from_ccel(ccel_data, args.machine_type)
 
@@ -194,6 +221,7 @@ def _cmd_replay(args: argparse.Namespace) -> None:
     from .tdx.ccel import parse_event_log
     from .tdx.rtmr import replay_event_log
 
+    _require_file(args.ccel, "--ccel")
     ccel_data = args.ccel.read_bytes()
     log = parse_event_log(ccel_data)
     rtmrs = replay_event_log(log)

@@ -6,11 +6,15 @@
 [![PyPI](https://img.shields.io/pypi/v/cvm-measure)](https://pypi.org/project/cvm-measure/)
 ![License](https://img.shields.io/github/license/cohere-ai/cvm-measure)
 
-Compute expected Intel TDX register values (MRTD + RTMR[0-3]) from published inputs, entirely offline.
-
-`cvm-measure` is the TDX equivalent of [sev-snp-measure](https://github.com/virtee/sev-snp-measure) for AMD SEV-SNP. It takes firmware, UKI, baseline, and RAM topology as inputs and produces the hex register values that a correctly-launched CVM should report.
+Compute expected confidential VM register values from published inputs, entirely offline. `cvm-measure` takes firmware, UKI, baseline, and RAM topology as inputs and produces the hex register values that a correctly-launched CVM should report, letting you verify attestation without booting a VM.
 
 **Zero dependencies.** Python 3.10+ standard library only.
+
+### Supported Hardware
+
+| Platform | Technology | Registers | Status |
+|----------|------------|-----------|--------|
+| Intel | [TDX](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html) | MRTD, RTMR[0-3] | Supported |
 
 ## Install
 
@@ -46,6 +50,31 @@ rtmr0: 8f4e1d...
 rtmr1: c2a9b7...
 rtmr2: 5e8f3a...
 rtmr3: 000000...
+```
+
+### JSON output
+
+Add `--output-format json` for machine-readable output, useful for CI pipelines and scripting:
+
+```bash
+cvm-measure tdx \
+  --firmware OVMF.fd \
+  --uki BOOTX64.EFI \
+  --baseline baseline.json \
+  --ram 234 \
+  --output-format json
+```
+
+Output:
+
+```json
+{
+  "mrtd": "3a7b2c...",
+  "rtmr0": "8f4e1d...",
+  "rtmr1": "c2a9b7...",
+  "rtmr2": "5e8f3a...",
+  "rtmr3": "000000..."
+}
 ```
 
 ### Multi-NUMA topology
@@ -129,7 +158,7 @@ A baseline file contains SHA-384 digests for events that **cannot be computed of
 - **Boot variables**: BootOrder, Boot0000-Boot0003
 - **GPT**: Disk partition table hash
 
-Baselines are **not shipped with this tool**. They are data artifacts published alongside each CVM image release by the operator.
+Baselines are **not shipped with this tool**. Cohere publishes baselines in the [cohere-cc-baselines](https://github.com/cohere-ai/cohere-cc-baselines) repository, organized by provider, platform, and machine type.
 
 ### How baselines are created
 

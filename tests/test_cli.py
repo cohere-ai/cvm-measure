@@ -1,3 +1,17 @@
+# Copyright 2026 Cohere, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests: CLI argument parsing and basic flows."""
 
 from __future__ import annotations
@@ -195,6 +209,134 @@ class TestCLIOutputFormat:
         out = capsys.readouterr().out
         assert "mrtd:" in out
         assert "rtmr0:" in out
+
+
+class TestCLIFileValidation:
+
+    def test_missing_firmware(self, tmp_path, capsys) -> None:
+        with pytest.raises(SystemExit):
+            main([
+                "tdx",
+                "--firmware", str(tmp_path / "nonexistent.fd"),
+                "--ram", "234",
+                "--mode", "mrtd",
+            ])
+        err = capsys.readouterr().err
+        assert "not found" in err
+
+    def test_missing_uki(self, firmware_a3, tmp_path, capsys) -> None:
+        fw_path = tmp_path / "fw.fd"
+        fw_path.write_bytes(firmware_a3)
+        with pytest.raises(SystemExit):
+            main([
+                "tdx",
+                "--firmware", str(fw_path),
+                "--uki", str(tmp_path / "nonexistent.efi"),
+                "--baseline", str(tmp_path / "baseline.json"),
+                "--ram", "234",
+            ])
+
+    def test_missing_baseline(self, firmware_a3, uki_a3, tmp_path, capsys) -> None:
+        fw_path = tmp_path / "fw.fd"
+        fw_path.write_bytes(firmware_a3)
+        uki_path = tmp_path / "uki.efi"
+        uki_path.write_bytes(uki_a3)
+        with pytest.raises(SystemExit):
+            main([
+                "tdx",
+                "--firmware", str(fw_path),
+                "--uki", str(uki_path),
+                "--baseline", str(tmp_path / "nonexistent.json"),
+                "--ram", "234",
+            ])
+
+
+class TestCLIMrtdOnly:
+
+    def test_mrtd_text(self, firmware_a3, golden_a3, tmp_path, capsys) -> None:
+        fw_path = tmp_path / "fw.fd"
+        fw_path.write_bytes(firmware_a3)
+
+        main([
+            "tdx",
+            "--firmware", str(fw_path),
+            "--ram", "234",
+            "--mode", "mrtd",
+        ])
+
+        out = capsys.readouterr().out
+        assert "mrtd:" in out
+        assert golden_a3.mrtd in out
+
+    def test_mrtd_json(self, firmware_a3, golden_a3, tmp_path, capsys) -> None:
+        fw_path = tmp_path / "fw.fd"
+        fw_path.write_bytes(firmware_a3)
+
+        main([
+            "tdx",
+            "--firmware", str(fw_path),
+            "--ram", "234",
+            "--mode", "mrtd",
+            "--output-format", "json",
+        ])
+
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data["mrtd"] == golden_a3.mrtd
+
+
+class TestCLIComputeAll:
+
+    def test_compute_all_text(
+        self, firmware_a3, uki_a3, baseline_a3, golden_a3, tmp_path, capsys
+    ) -> None:
+        fw_path = tmp_path / "fw.fd"
+        fw_path.write_bytes(firmware_a3)
+        uki_path = tmp_path / "uki.efi"
+        uki_path.write_bytes(uki_a3)
+
+        from cvm_measure.tdx.baseline import save
+        bl_path = tmp_path / "baseline.json"
+        save(baseline_a3, bl_path)
+
+        main([
+            "tdx",
+            "--firmware", str(fw_path),
+            "--uki", str(uki_path),
+            "--baseline", str(bl_path),
+            "--ram", "234",
+        ])
+
+        out = capsys.readouterr().out
+        assert "mrtd:" in out
+        assert golden_a3.mrtd in out
+
+    def test_compute_all_json(
+        self, firmware_a3, uki_a3, baseline_a3, golden_a3, tmp_path, capsys
+    ) -> None:
+        fw_path = tmp_path / "fw.fd"
+        fw_path.write_bytes(firmware_a3)
+        uki_path = tmp_path / "uki.efi"
+        uki_path.write_bytes(uki_a3)
+
+        from cvm_measure.tdx.baseline import save
+        bl_path = tmp_path / "baseline.json"
+        save(baseline_a3, bl_path)
+
+        main([
+            "tdx",
+            "--firmware", str(fw_path),
+            "--uki", str(uki_path),
+            "--baseline", str(bl_path),
+            "--ram", "234",
+            "--output-format", "json",
+        ])
+
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data["mrtd"] == golden_a3.mrtd
+        assert data["rtmr0"] == golden_a3.rtmr0
+        assert data["rtmr2"] == golden_a3.rtmr2
 
 
 class TestCLIReplay:

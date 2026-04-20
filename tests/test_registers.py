@@ -1,3 +1,17 @@
+# Copyright 2026 Cohere, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests: offline register computation and constants."""
 
 from __future__ import annotations
@@ -7,7 +21,13 @@ import struct
 
 import pytest
 
-from cvm_measure.tdx.registers import EFI_ACTION_DIGESTS, SEPARATOR_DIGEST
+from cvm_measure.tdx.registers import (
+    EFI_ACTION_DIGESTS,
+    SEPARATOR_DIGEST,
+    ComputedRegisters,
+    UKI_MEASURED_SECTIONS,
+    compute_all,
+)
 from cvm_measure.tdx.rtmr import SHA384_SIZE, replay_digests
 
 
@@ -122,3 +142,76 @@ class TestRTMR2FromCCEL:
             expected = hashlib.sha384((section + "\0").encode("ascii")).digest()
             actual = name_event.get_digest(TPM_ALG_SHA384).hash
             assert actual == expected, f"Section name mismatch for {section}"
+
+
+class TestComputedRegisters:
+
+    def test_as_dict_keys(self) -> None:
+        regs = ComputedRegisters(
+            mrtd="a" * 96,
+            rtmr0="b" * 96,
+            rtmr1="c" * 96,
+            rtmr2="d" * 96,
+            rtmr3="e" * 96,
+        )
+        d = regs.as_dict()
+        assert set(d.keys()) == {"mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"}
+
+
+class TestUKIMeasuredSections:
+
+    def test_section_list_is_ordered(self) -> None:
+        assert UKI_MEASURED_SECTIONS == [".linux", ".osrel", ".cmdline", ".initrd", ".uname", ".sbat"]
+
+
+class TestComputeAll:
+    """End-to-end register computation using firmware + UKI + baseline."""
+
+    def test_compute_all_returns_registers(
+        self, firmware_a3: bytes, uki_a3: bytes, baseline_a3, golden_a3
+    ) -> None:
+        regs = compute_all(
+            firmware_a3,
+            uki_a3,
+            baseline_a3,
+            ram_gib=234,
+        )
+        assert isinstance(regs, ComputedRegisters)
+        assert len(regs.mrtd) == 96
+        assert len(regs.rtmr0) == 96
+        assert len(regs.rtmr1) == 96
+        assert len(regs.rtmr2) == 96
+        assert len(regs.rtmr3) == 96
+
+    def test_mrtd_matches_golden(
+        self, firmware_a3: bytes, uki_a3: bytes, baseline_a3, golden_a3
+    ) -> None:
+        regs = compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+        assert regs.mrtd == golden_a3.mrtd
+
+    def test_rtmr0_matches_golden(
+        self, firmware_a3: bytes, uki_a3: bytes, baseline_a3, golden_a3
+    ) -> None:
+        regs = compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+        assert regs.rtmr0 == golden_a3.rtmr0
+
+    def test_rtmr2_matches_golden(
+        self, firmware_a3: bytes, uki_a3: bytes, baseline_a3, golden_a3
+    ) -> None:
+        regs = compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+        assert regs.rtmr2 == golden_a3.rtmr2
+
+    def test_rtmr3_defaults_to_zeros(
+        self, firmware_a3: bytes, uki_a3: bytes, baseline_a3
+    ) -> None:
+        regs = compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+        assert regs.rtmr3 == "0" * 96
+
+    def test_rtmr3_with_custom_value(
+        self, firmware_a3: bytes, uki_a3: bytes, baseline_a3
+    ) -> None:
+        custom = "ab" * 48
+        regs = compute_all(
+            firmware_a3, uki_a3, baseline_a3, ram_gib=234, rtmr3_hex=custom
+        )
+        assert regs.rtmr3 == custom

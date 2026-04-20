@@ -9,6 +9,8 @@ build/
 
 # Testing
 .pytest_cache/
+tests/fixtures/firmware/*.fd
+tests/fixtures/uki/*.efi
 
 # IDE
 .vscode/
