@@ -9,6 +9,7 @@ build/
 
 # Testing
 .pytest_cache/
+.coverage
 tests/fixtures/firmware/*.fd
 tests/fixtures/uki/*.efi
 
