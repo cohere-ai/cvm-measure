@@ -144,7 +144,7 @@ def pe_extract_section(
     return None
 
 
-def pe_list_sections(pe_data: bytes) -> list[dict]:
+def pe_list_sections(pe_data: bytes) -> list[dict[str, object]]:
     """List all PE sections with metadata."""
     if len(pe_data) < 64 or pe_data[:2] != b"MZ":
         return []

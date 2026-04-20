@@ -108,7 +108,7 @@ def load(path: Path) -> Baseline:
 
 def save(baseline: Baseline, path: Path) -> None:
     """Save a baseline to a JSON file."""
-    data: dict = {}
+    data: dict[str, object] = {}
     if baseline.provider:
         data["provider"] = baseline.provider
     if baseline.platform:

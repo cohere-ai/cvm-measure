@@ -118,7 +118,7 @@ def _resolve_rtmr3(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         rtmr3 = extend_rtmr(bytes(SHA384_SIZE), digest)
         return rtmr3.hex()
 
-    return args.rtmr3
+    return str(args.rtmr3) if args.rtmr3 is not None else None
 
 
 def _require_file(path: Path, flag: str) -> None:
@@ -205,7 +205,7 @@ def _cmd_extract_baseline(args: argparse.Namespace) -> None:
         print(f"Baseline written to {args.output}", file=sys.stderr)
     else:
         from dataclasses import asdict
-        data: dict = {}
+        data: dict[str, object] = {}
         if baseline.provider:
             data["provider"] = baseline.provider
         if baseline.platform:
