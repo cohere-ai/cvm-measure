@@ -175,6 +175,8 @@ def _compute_rtmr1(uki: bytes, baseline: Baseline) -> str:
       7. "Exit Boot Services Returned with Success"    (computed constant)
     """
     baseline_events = baseline.rtmr_events(1)
+    if len(baseline_events) < 1:
+        raise ValueError("RTMR[1] baseline requires at least 1 event (GPT hash), got 0")
     gpt_digest = bytes.fromhex(baseline_events[0].digest)
 
     uki_auth = pe_authenticode_digest(uki, "sha384")
