@@ -158,7 +158,7 @@ A baseline file contains SHA-384 digests for events that **cannot be computed of
 - **Boot variables**: BootOrder, Boot0000-Boot0003
 - **GPT**: Disk partition table hash
 
-Baselines are **not shipped with this tool**. Cohere publishes baselines in the [cohere-cc-baselines](https://github.com/cohere-ai/cohere-cc-baselines) repository, organized by provider, platform, and machine type.
+Baselines are **not shipped with this tool**. Each CVM operator should publish baselines for their images. For an example, see Cohere's [cohere-cc-baselines](https://github.com/cohere-ai/cohere-cc-baselines) repository, organized by provider, platform, and machine type.
 
 ### How baselines are created
 

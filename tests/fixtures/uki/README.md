@@ -6,16 +6,14 @@ end-to-end register computation tests.
 ## How to obtain
 
 The UKI (BOOTX64.EFI) is extracted from a PodVM disk image built with
-[mkosi](https://github.com/systemd/mkosi) by the Cloud API Adapter CI
-pipeline. The disk images are stored in GCS.
+[mkosi](https://github.com/systemd/mkosi). Any TDX-capable disk image
+that contains a systemd-stub UKI on its EFI System Partition will work.
 
-### 1. Download the disk image
+### 1. Obtain a disk image
 
-```bash
-gsutil cp \
-  gs://cohere-confidential-computing-podvm-build/ubuntu-mkosi-tdx-debug-2026-03-27/disk.tar.gz \
-  /tmp/disk.tar.gz
-```
+Download or build a `disk.tar.gz` containing a raw disk image with an
+EFI System Partition. For example, build one with mkosi or obtain one
+from your CI pipeline.
 
 ### 2. Extract the UKI
 
