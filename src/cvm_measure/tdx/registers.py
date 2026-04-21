@@ -135,6 +135,10 @@ def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:
       16. Boot0000                   (baseline event)
     """
     baseline_events = baseline.rtmr_events(0)
+    if len(baseline_events) < 5:
+        raise ValueError(
+            f"RTMR[0] baseline requires at least 5 events (TdxTable + PK/KEK/db/dbx), got {len(baseline_events)}"
+        )
     cfv_digest = hashlib.sha384(firmware[0:0x20000]).digest()
 
     sb_flag_data = b"\x01" if baseline.secureboot_enabled else b"\x00"

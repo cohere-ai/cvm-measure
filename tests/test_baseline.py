@@ -62,6 +62,8 @@ class TestInferProvider:
         ("Standard_EC4as_v5", "azure"),
         ("m7i.metal", "aws"),
         ("c6i.xlarge", "aws"),
+        ("c6i.2xlarge", "aws"),
+        ("p4d.24xlarge", "aws"),
         ("r6i.large", "aws"),
         ("t3.micro", "aws"),
         ("t3.nano", "aws"),

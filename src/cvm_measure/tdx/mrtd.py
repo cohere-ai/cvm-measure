@@ -364,6 +364,8 @@ def ram_regions(
         numa_nodes: Number of NUMA nodes.
         max_per_node_gib: Maximum GiB per NUMA node. Defaults to ram_gib.
     """
+    if ram_gib < 4:
+        raise ValueError(f"ram_gib must be >= 4 (got {ram_gib}); TDX VMs require RAM above the 3 GiB MMIO hole")
     if max_per_node_gib is None:
         max_per_node_gib = ram_gib
 
@@ -379,9 +381,10 @@ def ram_regions(
         length = max_node - taken
         if remaining < length:
             length = remaining
-        regions.append(GuestPhysicalRegion(start, length))
-        start += length
-        remaining -= length
+        if length > 0:
+            regions.append(GuestPhysicalRegion(start, length))
+            start += length
+            remaining -= length
         taken = 0
     return regions
 

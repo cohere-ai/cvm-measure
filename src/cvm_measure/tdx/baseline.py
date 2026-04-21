@@ -58,7 +58,7 @@ def _infer_provider(machine_type: str) -> str:
     mt = machine_type.lower()
     if mt.startswith("standard_") or mt.startswith("standard "):
         return "azure"
-    if "." in mt and any(mt.endswith(s) for s in (".metal", ".xlarge", ".large", ".medium", ".small", ".micro", ".nano")):
+    if "." in mt:
         return "aws"
     return "gcp"
 
@@ -81,7 +81,11 @@ class Baseline:
 def load(path: Path) -> Baseline:
     """Load a baseline from a JSON file."""
     data = json.loads(path.read_text())
-    events = [BaselineEvent(**e) for e in data.get("events", [])]
+    known_keys = {"rtmr", "event_type", "label", "digest"}
+    events = [
+        BaselineEvent(**{k: v for k, v in e.items() if k in known_keys})
+        for e in data.get("events", [])
+    ]
     return Baseline(
         machine_type=data["machine_type"],
         firmware_sha384=data.get("firmware_sha384", ""),

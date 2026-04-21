@@ -33,10 +33,12 @@ jobs:
         run: mypy src/
 
       - name: Security scan (bandit)
-        run: bandit -r src/ -f json -o bandit-report.json || true
+        run: bandit -r src/ -f json -o bandit-report.json
+        continue-on-error: true
 
       - name: Dependency audit (pip-audit)
-        run: pip-audit --format=json --output=pip-audit-report.json || true
+        run: pip-audit --format=json --output=pip-audit-report.json
+        continue-on-error: true
 
       - name: Test (pytest)
         run: pytest tests/ -v --tb=short
