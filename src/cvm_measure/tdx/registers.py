@@ -32,7 +32,7 @@ import struct
 from dataclasses import dataclass
 
 from .baseline import Baseline
-from .mrtd import compute_mrtd_hex
+from .mrtd import compute_mrtd
 from .pe import pe_authenticode_digest, pe_extract_section
 from .rtmr import SHA384_SIZE, replay_digests
 from .uefi import compute_secureboot_digest
@@ -110,7 +110,7 @@ def _compute_mrtd(
     numa_nodes: int = 1,
     max_per_node_gib: int | None = None,
 ) -> str:
-    return compute_mrtd_hex(firmware, ram_gib, numa_nodes, max_per_node_gib)
+    return compute_mrtd(firmware, ram_gib, numa_nodes, max_per_node_gib).hex()
 
 
 def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:

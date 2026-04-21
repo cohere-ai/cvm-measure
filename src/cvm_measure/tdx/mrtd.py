@@ -545,13 +545,3 @@ def compute_mrtd(
     for region in regions:
         m.init_memory_region(region)
     return m.finalize()
-
-
-def compute_mrtd_hex(
-    firmware: bytes,
-    ram_gib: int | None = None,
-    numa_nodes: int = 1,
-    max_per_node_gib: int | None = None,
-) -> str:
-    """Compute MRTD and return as hex string."""
-    return compute_mrtd(firmware, ram_gib, numa_nodes, max_per_node_gib).hex()

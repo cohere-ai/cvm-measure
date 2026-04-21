@@ -205,17 +205,7 @@ def _cmd_extract_baseline(args: argparse.Namespace) -> None:
         save(baseline, args.output)
         print(f"Baseline written to {args.output}", file=sys.stderr)
     else:
-        from dataclasses import asdict
-        data: dict[str, object] = {}
-        if baseline.provider:
-            data["provider"] = baseline.provider
-        if baseline.platform:
-            data["platform"] = baseline.platform
-        data["machine_type"] = baseline.machine_type
-        data["firmware_sha384"] = baseline.firmware_sha384
-        data["secureboot_enabled"] = baseline.secureboot_enabled
-        data["events"] = [asdict(e) for e in baseline.events]
-        print(json.dumps(data, indent=2))
+        print(json.dumps(baseline.to_dict(), indent=2))
 
 
 def _cmd_replay(args: argparse.Namespace) -> None:

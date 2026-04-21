@@ -37,7 +37,6 @@ from cvm_measure.tdx.mrtd import (
     _parse_tdx_metadata,
     _uuid_to_efi_bytes,
     compute_mrtd,
-    compute_mrtd_hex,
     ram_regions,
 )
 
@@ -199,7 +198,7 @@ class TestFirmwareParsing:
         assert len(result) == 48
 
     def test_compute_mrtd_hex_matches_golden(self, firmware_a3: bytes, golden_a3) -> None:
-        result = compute_mrtd_hex(firmware_a3, ram_gib=234)
+        result = compute_mrtd(firmware_a3, ram_gib=234).hex()
         assert len(result) == 96
         assert result == golden_a3.mrtd
 

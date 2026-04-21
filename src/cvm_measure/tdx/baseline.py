@@ -77,6 +77,19 @@ class Baseline:
     def rtmr_events(self, rtmr: int) -> list[BaselineEvent]:
         return [e for e in self.events if e.rtmr == rtmr]
 
+    def to_dict(self) -> dict[str, object]:
+        """Serialize to a dict suitable for JSON output."""
+        data: dict[str, object] = {}
+        if self.provider:
+            data["provider"] = self.provider
+        if self.platform:
+            data["platform"] = self.platform
+        data["machine_type"] = self.machine_type
+        data["firmware_sha384"] = self.firmware_sha384
+        data["secureboot_enabled"] = self.secureboot_enabled
+        data["events"] = [asdict(e) for e in self.events]
+        return data
+
 
 def load(path: Path) -> Baseline:
     """Load a baseline from a JSON file."""
@@ -98,17 +111,8 @@ def load(path: Path) -> Baseline:
 
 def save(baseline: Baseline, path: Path) -> None:
     """Save a baseline to a JSON file."""
-    data: dict[str, object] = {}
-    if baseline.provider:
-        data["provider"] = baseline.provider
-    if baseline.platform:
-        data["platform"] = baseline.platform
-    data["machine_type"] = baseline.machine_type
-    data["firmware_sha384"] = baseline.firmware_sha384
-    data["secureboot_enabled"] = baseline.secureboot_enabled
-    data["events"] = [asdict(e) for e in baseline.events]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    path.write_text(json.dumps(baseline.to_dict(), indent=2) + "\n")
 
 
 # -- CCEL extraction -----------------------------------------------------------
