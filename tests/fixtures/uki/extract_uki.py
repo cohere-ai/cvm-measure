@@ -36,8 +36,12 @@ def extract_uki(archive: Path, output: Path) -> None:
         member = next(
             m for m in tar if m.name.endswith(".raw") or m.name == "disk.raw"
         )
-        tar.extract(member, path=tempfile.gettempdir())
-        raw = Path(tempfile.gettempdir()) / member.name
+        dest = Path(tempfile.gettempdir())
+        resolved = (dest / member.name).resolve()
+        if not resolved.is_relative_to(dest.resolve()):
+            raise ValueError(f"Refusing to extract {member.name!r}: path traversal detected")
+        tar.extract(member, path=dest, filter="data")
+        raw = resolved
 
     try:
         subprocess.run(
