@@ -20,9 +20,7 @@ import pytest
 
 from cvm_measure.tdx.pe import (
     pe_authenticode_digest,
-    pe_authenticode_digest_hex,
     pe_extract_section,
-    pe_list_sections,
 )
 
 
@@ -39,9 +37,6 @@ class TestPEValidation:
     def test_extract_section_not_pe_returns_none(self) -> None:
         assert pe_extract_section(b"not a pe", ".text") is None
 
-    def test_list_sections_not_pe_returns_empty(self) -> None:
-        assert pe_list_sections(b"not a pe") == []
-
     def test_truncated_pe_missing_signature(self) -> None:
         data = b"MZ" + b"\x00" * 62
         with pytest.raises(ValueError, match="PE signature"):
@@ -55,11 +50,6 @@ class TestPEAuthenticode:
         result = pe_authenticode_digest(uki_a3)
         assert len(result) == 48
 
-    def test_digest_hex(self, uki_a3: bytes) -> None:
-        result = pe_authenticode_digest_hex(uki_a3)
-        assert len(result) == 96
-        int(result, 16)
-
     def test_digest_deterministic(self, uki_a3: bytes) -> None:
         r1 = pe_authenticode_digest(uki_a3)
         r2 = pe_authenticode_digest(uki_a3)
@@ -72,20 +62,6 @@ class TestPEAuthenticode:
 
 class TestPESections:
     """Integration tests for PE section extraction from real UKI."""
-
-    def test_list_sections(self, uki_a3: bytes) -> None:
-        sections = pe_list_sections(uki_a3)
-        assert len(sections) > 0
-        names = [s["name"] for s in sections]
-        assert ".linux" in names or ".text" in names
-
-    def test_list_sections_have_metadata(self, uki_a3: bytes) -> None:
-        sections = pe_list_sections(uki_a3)
-        for sec in sections:
-            assert "name" in sec
-            assert "virtual_size" in sec
-            assert "raw_size" in sec
-            assert "raw_ptr" in sec
 
     def test_extract_linux_section(self, uki_a3: bytes) -> None:
         content = pe_extract_section(uki_a3, ".linux")
@@ -104,8 +80,6 @@ class TestPESections:
 
     def test_uki_has_measured_sections(self, uki_a3: bytes) -> None:
         """UKIs should contain at least some of the systemd-stub measured sections."""
-        sections = pe_list_sections(uki_a3)
-        names = {s["name"] for s in sections}
-        measured = {".linux", ".osrel", ".cmdline", ".initrd", ".uname", ".sbat"}
-        found = names & measured
+        measured = [".linux", ".osrel", ".cmdline", ".initrd", ".uname", ".sbat"]
+        found = [s for s in measured if pe_extract_section(uki_a3, s) is not None]
         assert len(found) >= 3, f"Expected >=3 measured sections, found {found}"

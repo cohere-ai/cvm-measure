@@ -42,13 +42,13 @@ def replay_events(
     for event in events:
         if event.event_type == EV_NO_ACTION:
             continue
-        digest = event.get_digest(algo_id)
+        digest = event.digests.get(algo_id)
         if digest is None:
             continue
         imr = event.imr_index
         if not (0 <= imr < NUM_RTMRS):
             continue
-        rtmrs[imr] = hashlib.sha384(rtmrs[imr] + digest.hash).digest()
+        rtmrs[imr] = hashlib.sha384(rtmrs[imr] + digest).digest()
 
     return rtmrs
 

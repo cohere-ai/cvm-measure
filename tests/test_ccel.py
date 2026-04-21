@@ -25,15 +25,14 @@ class TestCCELParser:
 
     def test_parse_spec_id(self, ccel_data_a3: bytes) -> None:
         log = parse_event_log(ccel_data_a3)
-        assert log.spec_id is not None
-        assert len(log.spec_id.digest_sizes) > 0
+        assert len(log.digest_sizes) > 0
 
     def test_all_events_have_sha384(self, ccel_data_a3: bytes) -> None:
         log = parse_event_log(ccel_data_a3)
         for event in log.measurable_events:
-            d = event.get_digest(TPM_ALG_SHA384)
+            d = event.digests.get(TPM_ALG_SHA384)
             assert d is not None, f"Event {event.index} missing SHA-384 digest"
-            assert len(d.hash) == 48
+            assert len(d) == 48
 
     def test_parse_empty_raises(self) -> None:
         with pytest.raises(ValueError, match="too short"):

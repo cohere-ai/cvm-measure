@@ -68,9 +68,8 @@ class TestRTMR0FromCCEL:
         cfv_event = None
         for e in log.events_for_rtmr(0):
             if "PLATFORM_FIRMWARE" in e.event_type_name:
-                d = e.get_digest(TPM_ALG_SHA384)
-                if d:
-                    cfv_event = d.hash
+                cfv_event = e.digests.get(TPM_ALG_SHA384)
+                if cfv_event:
                     break
 
         assert cfv_event is not None, "No CFV event found in CCEL"
@@ -103,7 +102,7 @@ class TestRTMR1FromCCEL:
 
         log = parse_event_log(ccel_data_a3)
         rtmr1_events = log.events_for_rtmr(1)
-        ccel_digests = [e.get_digest(TPM_ALG_SHA384).hash for e in rtmr1_events]
+        ccel_digests = [e.digests[TPM_ALG_SHA384] for e in rtmr1_events]
         gpt_digest = bytes.fromhex(baseline_a3.rtmr_events(1)[0].digest)
 
         digests = [
@@ -126,7 +125,7 @@ class TestRTMR2FromCCEL:
         from cvm_measure.tdx.ccel import TPM_ALG_SHA384, parse_event_log
 
         log = parse_event_log(ccel_data_a3)
-        digests = [e.get_digest(TPM_ALG_SHA384).hash for e in log.events_for_rtmr(2)]
+        digests = [e.digests[TPM_ALG_SHA384] for e in log.events_for_rtmr(2)]
         rtmr2 = replay_digests(digests).hex()
         assert rtmr2 == golden_a3.rtmr2
 
@@ -141,7 +140,7 @@ class TestRTMR2FromCCEL:
             name_event = events[i * 2]
             from cvm_measure.tdx.ccel import TPM_ALG_SHA384
             expected = hashlib.sha384((section + "\0").encode("ascii")).digest()
-            actual = name_event.get_digest(TPM_ALG_SHA384).hash
+            actual = name_event.digests[TPM_ALG_SHA384]
             assert actual == expected, f"Section name mismatch for {section}"
 
 
