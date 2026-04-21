@@ -16,6 +16,7 @@
 
 Usage:
     cvm-measure tdx --firmware OVMF.fd --uki BOOTX64.EFI --baseline baseline.json --ram 234
+    cvm-measure tdx --firmware OVMF.fd --uki BOOTX64.EFI --baseline baseline.json --ram 234 --output-format json
     cvm-measure tdx --firmware OVMF.fd --ram 234 --mode mrtd
     cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type a3-highgpu-1g -o baseline.json
     cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type a3-highgpu-1g --firmware-sha384 abc...def
@@ -34,7 +35,7 @@ from . import __version__
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="cvm-measure",
-        description="Compute expected TDX register values from published inputs.",
+        description="Compute expected confidential VM register values from published inputs.",
     )
     parser.add_argument("--version", action="version", version=f"cvm-measure {__version__}")
 

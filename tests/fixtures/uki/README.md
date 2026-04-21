@@ -5,8 +5,9 @@ end-to-end register computation tests.
 
 ## How to obtain
 
-The UKI (BOOTX64.EFI) is extracted from a PodVM disk image built by the
-fortress CI pipeline. The disk images are stored in GCS.
+The UKI (BOOTX64.EFI) is extracted from a PodVM disk image built with
+[mkosi](https://github.com/systemd/mkosi) by the Cloud API Adapter CI
+pipeline. The disk images are stored in GCS.
 
 ### 1. Download the disk image
 
@@ -18,7 +19,8 @@ gsutil cp \
 
 ### 2. Extract the UKI
 
-Use the extraction script from the fortress repo (requires `mtools`):
+The UKI lives on the EFI System Partition inside the disk image. Use the
+extraction script in this directory (requires `mtools`):
 
 ```bash
 # Install mtools if needed
@@ -26,7 +28,7 @@ brew install mtools   # macOS
 apt install mtools    # Linux
 
 # Extract BOOTX64.EFI from the disk image
-python3 ../fortress/deployment/terraform/podvm-build/scripts/extract-uki.py \
+python3 tests/fixtures/uki/extract_uki.py \
   /tmp/disk.tar.gz \
   tests/fixtures/uki/bootx64-a3-highgpu-1g.efi
 ```
