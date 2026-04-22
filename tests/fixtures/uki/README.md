@@ -18,7 +18,7 @@ from your CI pipeline.
 ### 2. Extract the UKI
 
 The UKI lives on the EFI System Partition inside the disk image. Use the
-extraction script in this directory (requires `mtools`):
+`extract-uki` CLI command (requires `mtools`):
 
 ```bash
 # Install mtools if needed
@@ -26,12 +26,12 @@ brew install mtools   # macOS
 apt install mtools    # Linux
 
 # Extract BOOTX64.EFI from the disk image
-python3 tests/fixtures/uki/extract_uki.py \
-  /tmp/disk.tar.gz \
-  tests/fixtures/uki/bootx64-a3-highgpu-1g.efi
+cvm-measure extract-uki \
+  --disk /tmp/disk.tar.gz \
+  --output tests/fixtures/uki/bootx64-a3-highgpu-1g.efi
 ```
 
-The script will print the file size and SHA-384 hash to stderr.
+The command will print the file size and SHA-384 hash to stderr.
 
 ### 3. Clean up
 

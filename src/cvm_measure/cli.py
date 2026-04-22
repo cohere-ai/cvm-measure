@@ -21,6 +21,8 @@ Usage:
     cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type a3-highgpu-1g -o baseline.json
     cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type a3-highgpu-1g --firmware-sha384 abc...def
     cvm-measure tdx replay --ccel ccel.bin
+    cvm-measure extract-uki --disk disk.raw --output BOOTX64.EFI
+    cvm-measure extract-uki --disk disk.tar.gz --output BOOTX64.EFI
 """
 
 from __future__ import annotations
@@ -39,8 +41,17 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--version", action="version", version=f"cvm-measure {__version__}")
 
-    sub = parser.add_subparsers(dest="tee", help="TEE type")
+    sub = parser.add_subparsers(dest="subcommand", help="Subcommand")
 
+    # -- extract-uki (top-level, not TEE-specific) -----------------------------
+    uki_parser = sub.add_parser(
+        "extract-uki",
+        help="Extract UKI (BOOTX64.EFI) from a pod VM disk image",
+    )
+    uki_parser.add_argument("--disk", required=True, type=Path, help="Path to disk image (.raw or .tar.gz)")
+    uki_parser.add_argument("--output", "-o", required=True, type=Path, help="Output path for extracted UKI")
+
+    # -- tdx -------------------------------------------------------------------
     tdx_parser = sub.add_parser("tdx", help="Intel TDX measurement")
     tdx_sub = tdx_parser.add_subparsers(dest="command")
 
@@ -68,11 +79,13 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
 
-    if args.tee is None:
+    if args.subcommand is None:
         parser.print_help()
         sys.exit(1)
 
-    if args.tee == "tdx":
+    if args.subcommand == "extract-uki":
+        _cmd_extract_uki(args)
+    elif args.subcommand == "tdx":
         if args.command == "extract-baseline":
             _cmd_extract_baseline(args)
         elif args.command == "replay":
@@ -219,3 +232,13 @@ def _cmd_replay(args: argparse.Namespace) -> None:
 
     for i in sorted(rtmrs):
         print(f"rtmr{i}: {rtmrs[i].hex()}")
+
+
+def _cmd_extract_uki(args: argparse.Namespace) -> None:
+    from .disk import extract_uki
+
+    _require_file(args.disk, "--disk")
+    digest = extract_uki(args.disk, args.output)
+    size = args.output.stat().st_size
+    print(f"Size: {size} bytes", file=sys.stderr)
+    print(f"SHA-384: {digest.hex()}", file=sys.stderr)
