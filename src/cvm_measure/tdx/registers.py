@@ -37,7 +37,16 @@ from .pe import pe_authenticode_digest, pe_extract_section
 from .rtmr import SHA384_SIZE, replay_digests
 from .uefi import compute_secureboot_digest
 
-UKI_MEASURED_SECTIONS = [".linux", ".osrel", ".cmdline", ".initrd", ".uname", ".sbat"]
+UKI_MEASURED_SECTIONS = [
+    ".linux",
+    ".osrel",
+    ".cmdline",
+    ".initrd",
+    ".ucode",
+    ".uname",
+    ".sbat",
+    ".pcrpkey",
+]
 
 SEPARATOR_DIGEST = hashlib.sha384(struct.pack("<I", 0)).digest()
 

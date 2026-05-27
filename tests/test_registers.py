@@ -161,7 +161,16 @@ class TestComputedRegisters:
 class TestUKIMeasuredSections:
 
     def test_section_list_is_ordered(self) -> None:
-        assert UKI_MEASURED_SECTIONS == [".linux", ".osrel", ".cmdline", ".initrd", ".uname", ".sbat"]
+        assert UKI_MEASURED_SECTIONS == [
+            ".linux",
+            ".osrel",
+            ".cmdline",
+            ".initrd",
+            ".ucode",
+            ".uname",
+            ".sbat",
+            ".pcrpkey",
+        ]
 
 
 class TestComputeAll:
