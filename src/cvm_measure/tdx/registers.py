@@ -182,20 +182,21 @@ def _compute_rtmr1(
     Event order (7 total):
       1. "Calling EFI Application from Boot Option"  (computed constant)
       2. Separator                                     (computed constant)
-      3. GPT hash                                      (baseline)
+      3. GPT hash                                      (disk image, or baseline fallback)
       4. UKI PE Authenticode hash                      (computed from UKI)
       5. Kernel PE Authenticode hash                   (computed from UKI .linux)
       6. "Exit Boot Services Invocation"               (computed constant)
       7. "Exit Boot Services Returned with Success"    (computed constant)
     """
-    baseline_events = baseline.rtmr_events(1)
-    if len(baseline_events) < 1:
-        raise ValueError("RTMR[1] baseline requires at least 1 event (GPT hash), got 0")
-    gpt_digest = (
-        bytes.fromhex(gpt_digest_hex)
-        if gpt_digest_hex is not None
-        else bytes.fromhex(baseline_events[0].digest)
-    )
+    if gpt_digest_hex is not None:
+        gpt_digest = bytes.fromhex(gpt_digest_hex)
+    else:
+        baseline_events = baseline.rtmr_events(1)
+        if len(baseline_events) < 1:
+            raise ValueError(
+                "RTMR[1] requires a GPT hash from --disk or a legacy baseline GPT event"
+            )
+        gpt_digest = bytes.fromhex(baseline_events[0].digest)
 
     uki_auth = pe_authenticode_digest(uki, "sha384")
     kernel_data = pe_extract_section(uki, ".linux", use_virtual_size=True)

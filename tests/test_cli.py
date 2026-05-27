@@ -55,6 +55,7 @@ class TestCLIExtractBaseline:
         assert data["platform"] == "tdx"
         assert "events" in data
         assert len(data["events"]) > 0
+        assert not any(e["label"] == "GPT" for e in data["events"])
 
     def test_extract_baseline_to_file(self, ccel_data_a3, tmp_path) -> None:
         ccel_path = tmp_path / "ccel.bin"

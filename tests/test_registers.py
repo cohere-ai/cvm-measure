@@ -146,6 +146,16 @@ class TestRTMR1FromCCEL:
 
         assert regs.rtmr1 == expected
 
+    def test_rtmr1_without_gpt_requires_legacy_baseline_event(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        import pytest
+
+        baseline_a3.events = [e for e in baseline_a3.events if e.rtmr != 1]
+
+        with pytest.raises(ValueError, match="GPT hash"):
+            compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+
 
 class TestRTMR2FromCCEL:
 
