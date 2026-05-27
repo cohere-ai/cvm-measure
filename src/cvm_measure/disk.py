@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Extract UKI (BOOTX64.EFI) from pod VM disk images.
+"""Extract measured data from pod VM disk images.
 
 Locates the EFI System Partition via GPT parsing and copies out the UKI
 with mtools (mcopy). Supports raw disk images and .tar.gz archives.
@@ -31,6 +31,7 @@ from pathlib import Path
 
 # EFI System Partition GUID in mixed-endian binary form.
 ESP_GUID = bytes.fromhex("28732AC11FF8D211BA4B00A0C93EC93B")
+ZERO_GUID = bytes(16)
 
 
 def find_esp_offset(path: str | Path) -> int:
@@ -50,6 +51,56 @@ def find_esp_offset(path: str | Path) -> int:
                 return struct.unpack_from("<Q", entry, 32)[0] * 512
 
     raise ValueError("No EFI System Partition found")
+
+
+def _read_gpt_header_and_entries(path: str | Path) -> tuple[bytes, list[bytes]]:
+    """Return the GPT header and non-empty partition entries from a disk image."""
+    with open(path, "rb") as f:
+        f.seek(512)
+        hdr_prefix = f.read(92)
+        if len(hdr_prefix) < 92 or hdr_prefix[:8] != b"EFI PART":
+            raise ValueError("Not a GPT disk")
+
+        header_size = struct.unpack_from("<I", hdr_prefix, 12)[0]
+        if header_size < 92:
+            raise ValueError(f"Invalid GPT header size: {header_size}")
+
+        f.seek(512)
+        header = f.read(header_size)
+        if len(header) != header_size:
+            raise ValueError("Truncated GPT header")
+
+        partition_entry_lba = struct.unpack_from("<Q", hdr_prefix, 72)[0]
+        number_of_partition_entries = struct.unpack_from("<I", hdr_prefix, 80)[0]
+        size_of_partition_entry = struct.unpack_from("<I", hdr_prefix, 84)[0]
+
+        f.seek(partition_entry_lba * 512)
+        entries = []
+        for _ in range(number_of_partition_entries):
+            entry = f.read(size_of_partition_entry)
+            if len(entry) < size_of_partition_entry:
+                break
+            if entry[:16] != ZERO_GUID:
+                entries.append(entry)
+
+    return header, entries
+
+
+def compute_gpt_digest(disk: str | Path) -> bytes:
+    """Compute the SHA-384 digest for the UEFI EV_EFI_GPT_EVENT data.
+
+    EDK2 measures EFI_GPT_DATA, which is the GPT header, a UINTN count of
+    non-empty partition entries, and then those partition entries.
+    """
+    raw_path, cleanup = _resolve_raw_disk(Path(disk))
+    try:
+        header, entries = _read_gpt_header_and_entries(raw_path)
+    finally:
+        if cleanup is not None:
+            cleanup.cleanup()
+
+    event_data = header + struct.pack("<Q", len(entries)) + b"".join(entries)
+    return hashlib.sha384(event_data).digest()
 
 
 def _resolve_raw_disk(disk_path: Path) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:

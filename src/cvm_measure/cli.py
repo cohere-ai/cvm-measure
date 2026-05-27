@@ -97,6 +97,12 @@ def main(argv: list[str] | None = None) -> None:
 def _add_compute_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--firmware", type=Path, help="Path to OVMF firmware binary")
     parser.add_argument("--uki", type=Path, help="Path to UKI (BOOTX64.EFI)")
+    parser.add_argument(
+        "--disk",
+        type=Path,
+        default=None,
+        help="Path to pod VM disk image (.raw or .tar.gz); computes GPT digest for RTMR[1]",
+    )
     parser.add_argument("--baseline", type=Path, help="Path to baseline JSON")
     parser.add_argument("--ram", type=int, help="Total guest RAM in GiB")
     parser.add_argument("--numa-nodes", type=int, default=1, help="Number of NUMA nodes (default: 1)")
@@ -175,6 +181,11 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
 
     uki = args.uki.read_bytes()
     baseline = load_baseline(args.baseline)
+    gpt_digest_hex = None
+    if args.disk is not None:
+        _require_file(args.disk, "--disk")
+        from .disk import compute_gpt_digest
+        gpt_digest_hex = compute_gpt_digest(args.disk).hex()
 
     regs = compute_all_registers(
         firmware,
@@ -184,6 +195,7 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
         numa_nodes=args.numa_nodes,
         max_per_node_gib=args.max_per_node,
         rtmr3_hex=rtmr3_hex,
+        gpt_digest_hex=gpt_digest_hex,
     )
 
     _output_registers(regs.as_dict(), args.output_format)

@@ -88,6 +88,7 @@ def compute_all(
     numa_nodes: int = 1,
     max_per_node_gib: int | None = None,
     rtmr3_hex: str | None = None,
+    gpt_digest_hex: str | None = None,
 ) -> ComputedRegisters:
     """Compute MRTD + RTMR[0-3] entirely offline.
 
@@ -100,6 +101,8 @@ def compute_all(
         max_per_node_gib: Max GiB per NUMA node (defaults to ram_gib).
         rtmr3_hex: Pre-computed RTMR[3] hex string (96 chars). If None,
             defaults to all zeros (no initdata).
+        gpt_digest_hex: Pre-computed EV_EFI_GPT_EVENT SHA-384 hex string. If
+            None, falls back to the GPT event captured in the baseline.
     """
     if rtmr3_hex is None:
         rtmr3_hex = bytes(SHA384_SIZE).hex()
@@ -107,7 +110,7 @@ def compute_all(
     return ComputedRegisters(
         mrtd=_compute_mrtd(firmware, ram_gib, numa_nodes, max_per_node_gib),
         rtmr0=_compute_rtmr0(firmware, baseline),
-        rtmr1=_compute_rtmr1(uki, baseline),
+        rtmr1=_compute_rtmr1(uki, baseline, gpt_digest_hex),
         rtmr2=_compute_rtmr2(uki),
         rtmr3=rtmr3_hex,
     )
@@ -171,7 +174,9 @@ def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:
     return replay_digests(digests).hex()
 
 
-def _compute_rtmr1(uki: bytes, baseline: Baseline) -> str:
+def _compute_rtmr1(
+    uki: bytes, baseline: Baseline, gpt_digest_hex: str | None = None
+) -> str:
     """Compute RTMR[1] from UKI + baseline.
 
     Event order (7 total):
@@ -186,7 +191,11 @@ def _compute_rtmr1(uki: bytes, baseline: Baseline) -> str:
     baseline_events = baseline.rtmr_events(1)
     if len(baseline_events) < 1:
         raise ValueError("RTMR[1] baseline requires at least 1 event (GPT hash), got 0")
-    gpt_digest = bytes.fromhex(baseline_events[0].digest)
+    gpt_digest = (
+        bytes.fromhex(gpt_digest_hex)
+        if gpt_digest_hex is not None
+        else bytes.fromhex(baseline_events[0].digest)
+    )
 
     uki_auth = pe_authenticode_digest(uki, "sha384")
     kernel_data = pe_extract_section(uki, ".linux", use_virtual_size=True)

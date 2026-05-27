@@ -118,6 +118,34 @@ class TestRTMR1FromCCEL:
         rtmr1 = replay_digests(digests).hex()
         assert rtmr1 == golden_a3.rtmr1
 
+    def test_rtmr1_uses_gpt_digest_override(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        gpt_digest = hashlib.sha384(b"image-specific gpt").digest()
+        regs = compute_all(
+            firmware_a3,
+            uki_a3,
+            baseline_a3,
+            ram_gib=234,
+            gpt_digest_hex=gpt_digest.hex(),
+        )
+
+        from cvm_measure.tdx.pe import pe_authenticode_digest, pe_extract_section
+
+        kernel_data = pe_extract_section(uki_a3, ".linux", use_virtual_size=True)
+        assert kernel_data is not None
+        expected = replay_digests([
+            EFI_ACTION_DIGESTS["Calling EFI Application from Boot Option"],
+            SEPARATOR_DIGEST,
+            gpt_digest,
+            pe_authenticode_digest(uki_a3, "sha384"),
+            pe_authenticode_digest(kernel_data, "sha384"),
+            EFI_ACTION_DIGESTS["Exit Boot Services Invocation"],
+            EFI_ACTION_DIGESTS["Exit Boot Services Returned with Success"],
+        ]).hex()
+
+        assert regs.rtmr1 == expected
+
 
 class TestRTMR2FromCCEL:
 
