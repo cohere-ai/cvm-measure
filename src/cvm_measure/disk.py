@@ -33,22 +33,42 @@ from pathlib import Path
 ESP_GUID = bytes.fromhex("28732AC11FF8D211BA4B00A0C93EC93B")
 ZERO_GUID = bytes(16)
 
+# UEFI §5.3.2 — primary GPT header (first 92 bytes through PartitionEntryArrayCRC32).
+_GPT_HEADER_LBA = 1
+_SECTOR_SIZE = 512
+_GPT_SIGNATURE = b"EFI PART"
+_GPT_HEADER_PREFIX_LEN = 92
+_GPT_OFF_HEADER_SIZE = 12
+_GPT_OFF_PARTITION_ENTRY_LBA = 72
+_GPT_OFF_NUM_PARTITION_ENTRIES = 80
+_GPT_OFF_PARTITION_ENTRY_SIZE = 84
+
+# UEFI §5.3.3 — partition entry layout.
+_PART_OFF_TYPE_GUID = 0
+_PART_OFF_STARTING_LBA = 32
+_PART_MIN_LEN = _PART_OFF_STARTING_LBA + 8
+
 
 def find_esp_offset(path: str | Path) -> int:
     """Return the byte offset of the ESP in a GPT disk image."""
     with open(path, "rb") as f:
-        f.seek(512)
-        hdr = f.read(92)
-        if len(hdr) < 92 or hdr[:8] != b"EFI PART":
+        f.seek(_GPT_HEADER_LBA * _SECTOR_SIZE)
+        hdr = f.read(_GPT_HEADER_PREFIX_LEN)
+        if len(hdr) < _GPT_HEADER_PREFIX_LEN or hdr[: len(_GPT_SIGNATURE)] != _GPT_SIGNATURE:
             raise ValueError("Not a GPT disk")
 
-        f.seek(struct.unpack_from("<Q", hdr, 72)[0] * 512)
-        for _ in range(struct.unpack_from("<I", hdr, 80)[0]):
-            entry = f.read(struct.unpack_from("<I", hdr, 84)[0])
-            if len(entry) < 48:
+        partition_entry_lba = struct.unpack_from("<Q", hdr, _GPT_OFF_PARTITION_ENTRY_LBA)[0]
+        number_of_partition_entries = struct.unpack_from("<I", hdr, _GPT_OFF_NUM_PARTITION_ENTRIES)[0]
+        size_of_partition_entry = struct.unpack_from("<I", hdr, _GPT_OFF_PARTITION_ENTRY_SIZE)[0]
+
+        f.seek(partition_entry_lba * _SECTOR_SIZE)
+        for _ in range(number_of_partition_entries):
+            entry = f.read(size_of_partition_entry)
+            if len(entry) < _PART_MIN_LEN:
                 break
-            if entry[:16] == ESP_GUID:
-                return struct.unpack_from("<Q", entry, 32)[0] * 512
+            if entry[_PART_OFF_TYPE_GUID : _PART_OFF_TYPE_GUID + 16] == ESP_GUID:
+                starting_lba = struct.unpack_from("<Q", entry, _PART_OFF_STARTING_LBA)[0]
+                return starting_lba * _SECTOR_SIZE
 
     raise ValueError("No EFI System Partition found")
 
@@ -56,31 +76,31 @@ def find_esp_offset(path: str | Path) -> int:
 def _read_gpt_header_and_entries(path: str | Path) -> tuple[bytes, list[bytes]]:
     """Return the GPT header and non-empty partition entries from a disk image."""
     with open(path, "rb") as f:
-        f.seek(512)
-        hdr_prefix = f.read(92)
-        if len(hdr_prefix) < 92 or hdr_prefix[:8] != b"EFI PART":
+        f.seek(_GPT_HEADER_LBA * _SECTOR_SIZE)
+        hdr_prefix = f.read(_GPT_HEADER_PREFIX_LEN)
+        if len(hdr_prefix) < _GPT_HEADER_PREFIX_LEN or hdr_prefix[: len(_GPT_SIGNATURE)] != _GPT_SIGNATURE:
             raise ValueError("Not a GPT disk")
 
-        header_size = struct.unpack_from("<I", hdr_prefix, 12)[0]
-        if header_size < 92:
+        header_size = struct.unpack_from("<I", hdr_prefix, _GPT_OFF_HEADER_SIZE)[0]
+        if header_size < _GPT_HEADER_PREFIX_LEN:
             raise ValueError(f"Invalid GPT header size: {header_size}")
 
-        f.seek(512)
+        f.seek(_GPT_HEADER_LBA * _SECTOR_SIZE)
         header = f.read(header_size)
         if len(header) != header_size:
             raise ValueError("Truncated GPT header")
 
-        partition_entry_lba = struct.unpack_from("<Q", hdr_prefix, 72)[0]
-        number_of_partition_entries = struct.unpack_from("<I", hdr_prefix, 80)[0]
-        size_of_partition_entry = struct.unpack_from("<I", hdr_prefix, 84)[0]
+        partition_entry_lba = struct.unpack_from("<Q", hdr_prefix, _GPT_OFF_PARTITION_ENTRY_LBA)[0]
+        number_of_partition_entries = struct.unpack_from("<I", hdr_prefix, _GPT_OFF_NUM_PARTITION_ENTRIES)[0]
+        size_of_partition_entry = struct.unpack_from("<I", hdr_prefix, _GPT_OFF_PARTITION_ENTRY_SIZE)[0]
 
-        f.seek(partition_entry_lba * 512)
+        f.seek(partition_entry_lba * _SECTOR_SIZE)
         entries = []
         for _ in range(number_of_partition_entries):
             entry = f.read(size_of_partition_entry)
             if len(entry) < size_of_partition_entry:
                 break
-            if entry[:16] != ZERO_GUID:
+            if entry[_PART_OFF_TYPE_GUID : _PART_OFF_TYPE_GUID + 16] != ZERO_GUID:
                 entries.append(entry)
 
     return header, entries
