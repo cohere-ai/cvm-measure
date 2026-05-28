@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # -- tdx -------------------------------------------------------------------
     tdx_parser = sub.add_parser("tdx", help="Intel TDX measurement")
-    tdx_sub = tdx_parser.add_subparsers(dest="command")
+    tdx_sub = tdx_parser.add_subparsers(dest="command", required=False)
 
     # -- tdx (default: compute) ------------------------------------------------
     _add_compute_args(tdx_parser)
