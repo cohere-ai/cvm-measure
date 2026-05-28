@@ -58,6 +58,7 @@ def compute_all_registers(
     numa_nodes: int = 1,
     max_per_node_gib: int | None = None,
     rtmr3_hex: str | None = None,
+    gpt_digest_hex: str | None = None,
 ) -> ComputedRegisters:
     """Compute all TDX registers (MRTD + RTMR[0-3]) from published inputs.
 
@@ -69,12 +70,21 @@ def compute_all_registers(
         numa_nodes: Number of NUMA nodes (default 1).
         max_per_node_gib: Max GiB per NUMA node (default same as ram_gib).
         rtmr3_hex: Pre-computed RTMR[3] hex. Defaults to all zeros.
+        gpt_digest_hex: Pre-computed EV_EFI_GPT_EVENT SHA-384 hex. Defaults
+            to the GPT digest stored in the baseline.
 
     Returns:
         ComputedRegisters with mrtd, rtmr0, rtmr1, rtmr2, rtmr3 as hex strings.
     """
     return compute_all(
-        firmware, uki, baseline, ram_gib, numa_nodes, max_per_node_gib, rtmr3_hex
+        firmware,
+        uki,
+        baseline,
+        ram_gib,
+        numa_nodes,
+        max_per_node_gib,
+        rtmr3_hex,
+        gpt_digest_hex,
     )
 
 

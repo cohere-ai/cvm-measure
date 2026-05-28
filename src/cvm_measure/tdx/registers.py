@@ -37,7 +37,16 @@ from .pe import pe_authenticode_digest, pe_extract_section
 from .rtmr import SHA384_SIZE, replay_digests
 from .uefi import compute_secureboot_digest
 
-UKI_MEASURED_SECTIONS = [".linux", ".osrel", ".cmdline", ".initrd", ".uname", ".sbat"]
+UKI_MEASURED_SECTIONS = [
+    ".linux",
+    ".osrel",
+    ".cmdline",
+    ".initrd",
+    ".ucode",
+    ".uname",
+    ".sbat",
+    ".pcrpkey",
+]
 
 SEPARATOR_DIGEST = hashlib.sha384(struct.pack("<I", 0)).digest()
 
@@ -79,6 +88,7 @@ def compute_all(
     numa_nodes: int = 1,
     max_per_node_gib: int | None = None,
     rtmr3_hex: str | None = None,
+    gpt_digest_hex: str | None = None,
 ) -> ComputedRegisters:
     """Compute MRTD + RTMR[0-3] entirely offline.
 
@@ -91,6 +101,8 @@ def compute_all(
         max_per_node_gib: Max GiB per NUMA node (defaults to ram_gib).
         rtmr3_hex: Pre-computed RTMR[3] hex string (96 chars). If None,
             defaults to all zeros (no initdata).
+        gpt_digest_hex: Pre-computed EV_EFI_GPT_EVENT SHA-384 hex string. If
+            None, falls back to the GPT event captured in the baseline.
     """
     if rtmr3_hex is None:
         rtmr3_hex = bytes(SHA384_SIZE).hex()
@@ -98,7 +110,7 @@ def compute_all(
     return ComputedRegisters(
         mrtd=_compute_mrtd(firmware, ram_gib, numa_nodes, max_per_node_gib),
         rtmr0=_compute_rtmr0(firmware, baseline),
-        rtmr1=_compute_rtmr1(uki, baseline),
+        rtmr1=_compute_rtmr1(uki, baseline, gpt_digest_hex),
         rtmr2=_compute_rtmr2(uki),
         rtmr3=rtmr3_hex,
     )
@@ -162,22 +174,29 @@ def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:
     return replay_digests(digests).hex()
 
 
-def _compute_rtmr1(uki: bytes, baseline: Baseline) -> str:
+def _compute_rtmr1(
+    uki: bytes, baseline: Baseline, gpt_digest_hex: str | None = None
+) -> str:
     """Compute RTMR[1] from UKI + baseline.
 
     Event order (7 total):
       1. "Calling EFI Application from Boot Option"  (computed constant)
       2. Separator                                     (computed constant)
-      3. GPT hash                                      (baseline)
+      3. GPT hash                                      (disk image, or baseline fallback)
       4. UKI PE Authenticode hash                      (computed from UKI)
       5. Kernel PE Authenticode hash                   (computed from UKI .linux)
       6. "Exit Boot Services Invocation"               (computed constant)
       7. "Exit Boot Services Returned with Success"    (computed constant)
     """
-    baseline_events = baseline.rtmr_events(1)
-    if len(baseline_events) < 1:
-        raise ValueError("RTMR[1] baseline requires at least 1 event (GPT hash), got 0")
-    gpt_digest = bytes.fromhex(baseline_events[0].digest)
+    if gpt_digest_hex is not None:
+        gpt_digest = bytes.fromhex(gpt_digest_hex)
+    else:
+        baseline_events = baseline.rtmr_events(1)
+        if len(baseline_events) < 1:
+            raise ValueError(
+                "RTMR[1] requires a GPT hash from --disk or a legacy baseline GPT event"
+            )
+        gpt_digest = bytes.fromhex(baseline_events[0].digest)
 
     uki_auth = pe_authenticode_digest(uki, "sha384")
     kernel_data = pe_extract_section(uki, ".linux", use_virtual_size=True)

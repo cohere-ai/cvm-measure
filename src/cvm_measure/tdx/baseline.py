@@ -14,10 +14,10 @@
 
 """Baseline management for non-computable event digests.
 
-Stores VMM-generated digests (ACPI tables, GPT, boot variables, etc.)
-extracted once from a known-good CCEL and reused for measurement
-computation. SecureBoot is stored as a boolean so it can be toggled
-without a new CCEL.
+Stores VMM-generated digests (ACPI tables, boot variables, etc.) extracted
+once from a known-good CCEL and reused for measurement computation.
+Image-specific events such as GPT are computed from the disk image instead.
+SecureBoot is stored as a boolean so it can be toggled without a new CCEL.
 """
 
 from __future__ import annotations
@@ -121,6 +121,7 @@ _COMPUTABLE = {
     (0, EV_EFI_PLATFORM_FIRMWARE_BLOB2),
     (0, EV_SEPARATOR),
     (1, EV_EFI_ACTION),
+    (1, EV_EFI_GPT_EVENT),
     (1, EV_SEPARATOR),
     (1, EV_EFI_BOOT_SERVICES_APPLICATION),
 }
@@ -128,7 +129,6 @@ _COMPUTABLE = {
 _LABEL_OVERRIDES = {
     (0, EV_EFI_HANDOFF_TABLES2): "TdxTable",
     (0, EV_PLATFORM_CONFIG_FLAGS): "ACPI_DATA",
-    (1, EV_EFI_GPT_EVENT): "GPT",
 }
 
 
