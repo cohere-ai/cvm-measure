@@ -41,7 +41,17 @@ jobs:
         continue-on-error: true
 
       - name: Test (pytest)
-        run: pytest tests/ -v --tb=short
+        run: |
+          set +e
+          pytest tests/ -v --tb=short
+          code=$?
+          set -e
+          # Exit code 5 = no tests collected (scaffold main). Real failures still fail the job.
+          if [ "$code" -eq 5 ]; then
+            echo "No tests collected yet; treating as pass on scaffold tree."
+            exit 0
+          fi
+          exit "$code"
 
       - name: Upload security reports
         if: always()
