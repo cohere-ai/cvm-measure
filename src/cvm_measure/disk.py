@@ -85,10 +85,9 @@ def _read_gpt_header_and_entries(path: str | Path) -> tuple[bytes, list[bytes]]:
         if header_size < _GPT_HEADER_PREFIX_LEN:
             raise ValueError(f"Invalid GPT header size: {header_size}")
 
-        f.seek(_GPT_HEADER_LBA * _SECTOR_SIZE)
-        header = f.read(header_size)
-        if len(header) != header_size:
-            raise ValueError("Truncated GPT header")
+        # EDK2 copies sizeof(EFI_PARTITION_TABLE_HEADER) bytes, so only the first
+        # 92 bytes are measured even when HeaderSize is larger.
+        header = hdr_prefix
 
         partition_entry_lba = struct.unpack_from("<Q", hdr_prefix, _GPT_OFF_PARTITION_ENTRY_LBA)[0]
         number_of_partition_entries = struct.unpack_from("<I", hdr_prefix, _GPT_OFF_NUM_PARTITION_ENTRIES)[0]
@@ -109,8 +108,11 @@ def _read_gpt_header_and_entries(path: str | Path) -> tuple[bytes, list[bytes]]:
 def compute_gpt_digest(disk: str | Path) -> bytes:
     """Compute the SHA-384 digest for the UEFI EV_EFI_GPT_EVENT data.
 
-    EDK2 measures EFI_GPT_DATA, which is the GPT header, a UINTN count of
-    non-empty partition entries, and then those partition entries.
+    Mirrors Tcg2MeasureGptTable() in EDK2 DxeTpm2MeasureBootLib, which hashes
+    an EFI_GPT_DATA laid out as the 92-byte EFI_PARTITION_TABLE_HEADER copied
+    verbatim from LBA 1, a UINT64 count of non-empty partition entries, then
+    those entries. The header's own NumberOfPartitionEntries and HeaderCRC32
+    fields are measured as they appear on disk.
     """
     raw_path, cleanup = _resolve_raw_disk(Path(disk))
     try:
@@ -121,6 +123,19 @@ def compute_gpt_digest(disk: str | Path) -> bytes:
 
     event_data = header + struct.pack("<Q", len(entries)) + b"".join(entries)
     return hashlib.sha384(event_data).digest()
+
+
+# PEP 706 added tarfile extraction filters in 3.12 and backported them to
+# 3.10.12 / 3.11.4. Older 3.10 patch releases raise TypeError on filter=.
+_HAS_TAR_DATA_FILTER = hasattr(tarfile, "data_filter")
+
+
+def _reject_unsafe_member(member: tarfile.TarInfo) -> None:
+    """Approximate the 'data' filter for interpreters that predate PEP 706."""
+    if not member.isfile():
+        raise ValueError(f"Refusing to extract {member.name!r}: not a regular file")
+    if member.mode is not None and member.mode & 0o7000:
+        raise ValueError(f"Refusing to extract {member.name!r}: setuid/setgid/sticky bit set")
 
 
 def _resolve_raw_disk(disk_path: Path) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
@@ -138,7 +153,11 @@ def _resolve_raw_disk(disk_path: Path) -> tuple[Path, tempfile.TemporaryDirector
                 if not resolved.is_relative_to(dest.resolve()):
                     tmpdir.cleanup()
                     raise ValueError(f"Refusing to extract {member.name!r}: path traversal detected")
-                tar.extract(member, path=dest, filter="data")
+                if _HAS_TAR_DATA_FILTER:
+                    tar.extract(member, path=dest, filter="data")
+                else:
+                    _reject_unsafe_member(member)
+                    tar.extract(member, path=dest)  # nosec B202 - member vetted above
                 return resolved, tmpdir
 
     tmpdir.cleanup()

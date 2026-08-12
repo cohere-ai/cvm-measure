@@ -24,7 +24,12 @@ from pathlib import Path
 
 import pytest
 
-from cvm_measure.disk import ESP_GUID, extract_uki, find_esp_offset
+from cvm_measure.disk import (
+    ESP_GUID,
+    compute_gpt_digest,
+    extract_uki,
+    find_esp_offset,
+)
 
 HAS_MTOOLS = shutil.which("mcopy") is not None and shutil.which("mkfs.fat") is not None
 
@@ -53,6 +58,83 @@ def _build_gpt_disk(esp_data: bytes, esp_lba: int = 2048) -> bytes:
     off = esp_lba * 512
     disk[off:off + len(esp_data)] = esp_data
     return bytes(disk)
+
+
+def _build_measurable_gpt_disk(
+    *,
+    header_size: int = 92,
+    tail: bytes = b"",
+    num_entries: int = 4,
+    non_empty: int = 2,
+    entry_size: int = 128,
+) -> tuple[bytes, bytes, list[bytes]]:
+    """Build a GPT disk plus the header and entries EDK2 would measure."""
+    entry_lba = 2
+    entry_sectors = (num_entries * entry_size + 511) // 512
+    disk = bytearray((entry_lba + entry_sectors + 1) * 512)
+
+    hdr = bytearray(512)
+    hdr[:8] = b"EFI PART"
+    struct.pack_into("<I", hdr, 12, header_size)
+    struct.pack_into("<I", hdr, 16, 0xDEADBEEF)  # HeaderCRC32, measured verbatim
+    struct.pack_into("<Q", hdr, 72, entry_lba)
+    struct.pack_into("<I", hdr, 80, num_entries)
+    struct.pack_into("<I", hdr, 84, entry_size)
+    hdr[92 : 92 + len(tail)] = tail
+    disk[512:1024] = hdr
+
+    measured_entries = []
+    off = entry_lba * 512
+    for i in range(num_entries):
+        entry = bytearray(entry_size)
+        if i < non_empty:
+            entry[:16] = ESP_GUID if i == 0 else bytes([i + 1] * 16)
+            struct.pack_into("<Q", entry, 32, 2048 + i)
+            measured_entries.append(bytes(entry))
+        disk[off : off + entry_size] = entry
+        off += entry_size
+
+    return bytes(disk), bytes(hdr[:92]), measured_entries
+
+
+class TestComputeGptDigest:
+    def _digest(self, disk: bytes) -> bytes:
+        with tempfile.NamedTemporaryFile(suffix=".raw") as f:
+            f.write(disk)
+            f.flush()
+            return compute_gpt_digest(f.name)
+
+    def _expected(self, header: bytes, entries: list[bytes]) -> bytes:
+        return hashlib.sha384(
+            header + struct.pack("<Q", len(entries)) + b"".join(entries)
+        ).digest()
+
+    def test_matches_edk2_gpt_data_layout(self):
+        disk, header, entries = _build_measurable_gpt_disk()
+        assert self._digest(disk) == self._expected(header, entries)
+
+    def test_bytes_past_92_are_not_measured(self):
+        """EDK2 copies a fixed-size struct, so a larger HeaderSize adds nothing."""
+        a, header, entries = _build_measurable_gpt_disk(header_size=96, tail=b"\xa5" * 4)
+        b, _, _ = _build_measurable_gpt_disk(header_size=96, tail=b"\x5a" * 4)
+        assert self._digest(a) == self._digest(b) == self._expected(header, entries)
+
+    def test_skips_empty_partition_entries(self):
+        disk, header, entries = _build_measurable_gpt_disk(num_entries=8, non_empty=3)
+        assert len(entries) == 3
+        assert self._digest(disk) == self._expected(header, entries)
+
+    def test_tar_gz_disk(self):
+        disk, header, entries = _build_measurable_gpt_disk()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            raw = tmp / "disk.raw"
+            raw.write_bytes(disk)
+            archive = tmp / "disk.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                tar.add(raw, arcname="disk.raw")
+
+            assert compute_gpt_digest(archive) == self._expected(header, entries)
 
 
 class TestFindEspOffset:
