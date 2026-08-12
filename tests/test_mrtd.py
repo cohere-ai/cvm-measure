@@ -31,11 +31,9 @@ from cvm_measure.tdx.mrtd import (
     LaunchOptions,
     MaterialRegion,
     TDXMeasurement,
-    _efi_bytes_to_uuid,
     _extract_material_regions,
     _parse_fw_guid_table,
     _parse_tdx_metadata,
-    _uuid_to_efi_bytes,
     compute_mrtd,
     ram_regions,
 )
@@ -69,6 +67,20 @@ class TestRamRegions:
             assert a.start == b.start
             assert a.length == b.length
 
+    def test_node_cap_below_total_is_rejected(self) -> None:
+        """Nodes that cannot hold ram_gib must raise instead of truncating."""
+        with pytest.raises(ValueError, match="cannot hold"):
+            ram_regions(ram_gib=10, numa_nodes=1, max_per_node_gib=5)
+
+    def test_node_cap_below_mmio_hole_is_rejected(self) -> None:
+        """The first node absorbs the 3 GiB hole, so a smaller cap cannot fit."""
+        with pytest.raises(ValueError, match="cannot hold"):
+            ram_regions(ram_gib=10, numa_nodes=4, max_per_node_gib=2)
+
+    def test_exact_capacity_is_accepted(self) -> None:
+        regions = ram_regions(ram_gib=16, numa_nodes=2, max_per_node_gib=8)
+        assert sum(r.length for r in regions) == 16 * GIB + 2 * MIB
+
 
 class TestGuestPhysicalRegion:
 
@@ -94,19 +106,6 @@ class TestGuestPhysicalRegion:
         b = GuestPhysicalRegion(0x1000, 0x1000)
         result = a.intersect(b)
         assert result.length == 0
-
-
-class TestEFIGuidConversion:
-
-    def test_roundtrip(self) -> None:
-        u = uuid.UUID("96b582de-1fb2-45f7-baea-a366c55a082d")
-        assert _efi_bytes_to_uuid(_uuid_to_efi_bytes(u)) == u
-
-    def test_known_guid(self) -> None:
-        u = uuid.UUID("e47a6535-984a-4798-865e-4685a7bf8ec2")
-        efi = _uuid_to_efi_bytes(u)
-        assert len(efi) == 16
-        assert _efi_bytes_to_uuid(efi) == u
 
 
 class TestTDXMeasurementUnit:

@@ -37,6 +37,8 @@ import struct
 import uuid
 from dataclasses import dataclass, field
 
+from .guid import efi_bytes_to_uuid
+
 PAGE_SIZE = 4096
 MR_EXTEND_CHUNK_SIZE = 256
 EXTENSION_BUFFER_SIZE = 128
@@ -83,23 +85,6 @@ SIZEOF_HOB_HANDOFF_INFO = 56
 SIZEOF_HOB_RESOURCE_DESCRIPTOR = 48
 
 
-# -- EFI GUID binary helpers --------------------------------------------------
-
-
-def _uuid_to_efi_bytes(u: uuid.UUID) -> bytes:
-    """Convert a Python UUID to EFI mixed-endian GUID bytes."""
-    b = u.bytes
-    return struct.pack("<IHH", *struct.unpack(">IHH", b[:8])) + b[8:]
-
-
-def _efi_bytes_to_uuid(data: bytes) -> uuid.UUID:
-    """Convert EFI mixed-endian GUID bytes to a Python UUID."""
-    d1, d2, d3 = struct.unpack_from("<IHH", data, 0)
-    rest = data[8:16]
-    be = struct.pack(">IHH", d1, d2, d3) + rest
-    return uuid.UUID(bytes=be)
-
-
 # -- OVMF GUID table parsing --------------------------------------------------
 
 
@@ -115,7 +100,7 @@ def _parse_fw_guid_table(firmware: bytes) -> dict[uuid.UUID, bytes]:
 
     footer_offset = len(firmware) - FW_GUID_TABLE_END_OFFSET - FW_GUID_ENTRY_SIZE
     entry_size = struct.unpack_from("<H", firmware, footer_offset)[0]
-    entry_guid = _efi_bytes_to_uuid(firmware[footer_offset + 2 : footer_offset + 18])
+    entry_guid = efi_bytes_to_uuid(firmware[footer_offset + 2 : footer_offset + 18])
 
     if entry_guid != FW_GUID_TABLE_FOOTER:
         raise ValueError(f"Missing GUID table footer (got {entry_guid})")
@@ -134,7 +119,7 @@ def _parse_fw_guid_table(firmware: bytes) -> dict[uuid.UUID, bytes]:
             raise ValueError("Corrupted GUID table")
         ent_off = remaining - FW_GUID_ENTRY_SIZE
         ent_size = struct.unpack_from("<H", table, ent_off)[0]
-        ent_guid = _efi_bytes_to_uuid(table[ent_off + 2 : ent_off + 18])
+        ent_guid = efi_bytes_to_uuid(table[ent_off + 2 : ent_off + 18])
         if ent_size < FW_GUID_ENTRY_SIZE or ent_size > remaining:
             raise ValueError(f"Corrupted GUID table entry: size={ent_size}")
         block_start = remaining - ent_size
@@ -184,12 +169,12 @@ def _parse_tdx_metadata(firmware: bytes) -> TDXMetadata:
         raise ValueError(f"Invalid TDX metadata offset: 0x{metadata_offset:X}")
 
     guid_pos = fw_len - metadata_offset - 16
-    found_guid = _efi_bytes_to_uuid(firmware[guid_pos : guid_pos + 16])
+    found_guid = efi_bytes_to_uuid(firmware[guid_pos : guid_pos + 16])
     if found_guid != TDX_METADATA_GUID:
         raise ValueError(f"TDX metadata GUID mismatch: got {found_guid}")
 
     desc_pos = guid_pos + 16
-    signature, length, version, section_count = struct.unpack_from(
+    signature, _length, version, section_count = struct.unpack_from(
         "<IIII", firmware, desc_pos
     )
 
@@ -378,14 +363,19 @@ def ram_regions(
     remaining = ram_gib * GIB - taken
     max_node = max_per_node_gib * GIB
     for _node in range(numa_nodes):
-        length = max_node - taken
-        if remaining < length:
-            length = remaining
+        length = min(max_node - taken, remaining)
         if length > 0:
             regions.append(GuestPhysicalRegion(start, length))
             start += length
             remaining -= length
         taken = 0
+
+    if remaining > 0:
+        raise ValueError(
+            f"{numa_nodes} NUMA node(s) capped at {max_per_node_gib} GiB cannot hold "
+            f"{ram_gib} GiB of RAM: {remaining // GIB} GiB unplaced. The first node also "
+            f"absorbs the {MMIO_HOLE_START // GIB} GiB below the MMIO hole."
+        )
     return regions
 
 

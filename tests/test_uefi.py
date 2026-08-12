@@ -20,21 +20,7 @@ from cvm_measure.tdx.uefi import (
     build_uefi_variable_data,
     compute_secureboot_digest,
     compute_variable_digest,
-    guid_to_bytes,
 )
-
-
-class TestGuidToBytes:
-
-    def test_known_guid(self) -> None:
-        result = guid_to_bytes("8be4df61-93ca-11d2-aa0d-00e098032b8c")
-        assert len(result) == 16
-        assert result[:4] == b"\x61\xdf\xe4\x8b"
-
-    def test_round_trip(self) -> None:
-        guid = "d719b2cb-3d3a-4596-a3bc-dad00e67656f"
-        result = guid_to_bytes(guid)
-        assert len(result) == 16
 
 
 class TestBuildUefiVariableData:

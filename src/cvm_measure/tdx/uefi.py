@@ -31,6 +31,8 @@ from __future__ import annotations
 import hashlib
 import struct
 
+from .guid import guid_str_to_efi_bytes
+
 EFI_GLOBAL_VARIABLE_GUID = "8be4df61-93ca-11d2-aa0d-00e098032b8c"
 EFI_IMAGE_SECURITY_DATABASE_GUID = "d719b2cb-3d3a-4596-a3bc-dad00e67656f"
 
@@ -43,25 +45,13 @@ SECUREBOOT_VAR_GUIDS = {
 }
 
 
-def guid_to_bytes(guid_str: str) -> bytes:
-    """Convert a GUID string to 16 LE bytes."""
-    parts = guid_str.split("-")
-    return (
-        int(parts[0], 16).to_bytes(4, "little")
-        + int(parts[1], 16).to_bytes(2, "little")
-        + int(parts[2], 16).to_bytes(2, "little")
-        + bytes.fromhex(parts[3])
-        + bytes.fromhex(parts[4])
-    )
-
-
 def build_uefi_variable_data(
     guid: str,
     name: str,
     data: bytes,
 ) -> bytes:
     """Build a UEFI_VARIABLE_DATA binary structure."""
-    guid_bytes = guid_to_bytes(guid)
+    guid_bytes = guid_str_to_efi_bytes(guid)
     name_utf16 = name.encode("utf-16-le")
     return (
         guid_bytes
