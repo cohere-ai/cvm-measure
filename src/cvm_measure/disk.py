@@ -67,7 +67,7 @@ def find_esp_offset(path: str | Path) -> int:
             if len(entry) < _PART_MIN_LEN:
                 break
             if entry[_PART_OFF_TYPE_GUID : _PART_OFF_TYPE_GUID + 16] == ESP_GUID:
-                starting_lba = struct.unpack_from("<Q", entry, _PART_OFF_STARTING_LBA)[0]
+                starting_lba: int = struct.unpack_from("<Q", entry, _PART_OFF_STARTING_LBA)[0]
                 return starting_lba * _SECTOR_SIZE
 
     raise ValueError("No EFI System Partition found")
@@ -126,7 +126,7 @@ def compute_gpt_digest(disk: str | Path) -> bytes:
 def _resolve_raw_disk(disk_path: Path) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
     """If disk_path is a .tar.gz, extract the raw image; otherwise return as-is."""
     suffixes = "".join(disk_path.suffixes).lower()
-    if not (suffixes.endswith(".tar.gz") or suffixes.endswith(".tgz")):
+    if not suffixes.endswith((".tar.gz", ".tgz")):
         return disk_path, None
 
     tmpdir = tempfile.TemporaryDirectory()

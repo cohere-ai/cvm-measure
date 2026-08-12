@@ -21,7 +21,13 @@ from pathlib import Path
 
 import pytest
 
-from cvm_measure.tdx.baseline import Baseline, BaselineEvent, _infer_provider, load, save
+from cvm_measure.tdx.baseline import (
+    Baseline,
+    BaselineEvent,
+    _infer_provider,
+    load,
+    save,
+)
 
 
 class TestBaselineLoad:

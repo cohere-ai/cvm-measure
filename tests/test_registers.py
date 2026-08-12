@@ -22,8 +22,8 @@ import struct
 from cvm_measure.tdx.registers import (
     EFI_ACTION_DIGESTS,
     SEPARATOR_DIGEST,
-    ComputedRegisters,
     UKI_MEASURED_SECTIONS,
+    ComputedRegisters,
     compute_all,
 )
 from cvm_measure.tdx.rtmr import SHA384_SIZE, replay_digests

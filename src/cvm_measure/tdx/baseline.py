@@ -56,7 +56,7 @@ class BaselineEvent:
 def _infer_provider(machine_type: str) -> str:
     """Infer cloud provider from machine type naming conventions."""
     mt = machine_type.lower()
-    if mt.startswith("standard_") or mt.startswith("standard "):
+    if mt.startswith(("standard_", "standard ")):
         return "azure"
     if "." in mt:
         return "aws"
