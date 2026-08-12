@@ -126,6 +126,9 @@ def pe_extract_section(
 
     With use_virtual_size=True, returns only VirtualSize bytes, matching
     what systemd-stub measures for UKI section content.
+
+    A section with no content is reported as absent, so callers cannot
+    disagree about whether an empty section is measured.
     """
     header = _parse_pe_header(pe_data)
     if header is None:
@@ -141,6 +144,8 @@ def pe_extract_section(
         raw_ptr = struct.unpack_from("<I", pe_data, so + 20)[0]
         if name == section_name and raw_size > 0 and raw_ptr > 0:
             size = virt_size if use_virtual_size else raw_size
+            if size == 0:
+                return None
             return pe_data[raw_ptr : raw_ptr + size]
 
     return None

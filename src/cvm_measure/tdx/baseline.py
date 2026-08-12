@@ -140,6 +140,21 @@ def _uefi_var_name(event_data: bytes) -> str | None:
     return event_data[32 : 32 + name_len * 2].decode("utf-16-le", errors="replace")
 
 
+def _secureboot_value(event_data: bytes) -> bool:
+    """Read the SecureBoot flag out of a UEFI_VARIABLE_DATA structure.
+
+    The variable is a single UINT8 per UEFI 2.10 §3.3. Anything else, such
+    as a truncated or absent value, is treated as disabled rather than
+    enabled, so a malformed log cannot claim Secure Boot was on.
+    """
+    name_len: int = struct.unpack_from("<Q", event_data, 16)[0]
+    data_len: int = struct.unpack_from("<Q", event_data, 24)[0]
+    offset = 32 + name_len * 2
+    if data_len != 1 or offset + 1 > len(event_data):
+        return False
+    return event_data[offset] != 0
+
+
 def _is_computable(rtmr: int, event: EventLogEntry) -> bool:
     """Return True if this event's digest can be computed from inputs."""
     if rtmr == 2:
@@ -183,11 +198,7 @@ def extract_from_ccel(ccel_data: bytes, machine_type: str) -> Baseline:
             and event.event_type == EV_EFI_VARIABLE_DRIVER_CONFIG
             and _uefi_var_name(event.event_data) == "SecureBoot"
         ):
-            raw = event.event_data
-            name_len = struct.unpack_from("<Q", raw, 16)[0]
-            data_len = struct.unpack_from("<Q", raw, 24)[0]
-            offset = 32 + name_len * 2
-            baseline.secureboot_enabled = raw[offset : offset + data_len] != b"\x00"
+            baseline.secureboot_enabled = _secureboot_value(event.event_data)
 
         d = event.digests.get(TPM_ALG_SHA384)
         if d is None or _is_computable(rtmr, event):

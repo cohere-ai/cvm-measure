@@ -50,6 +50,13 @@ UKI_MEASURED_SECTIONS = [
 
 SEPARATOR_DIGEST = hashlib.sha384(struct.pack("<I", 0)).digest()
 
+# RTMR[0] events that occupy a fixed slot in the replay, addressed by label.
+_RTMR0_FIXED_LABELS = ("TdxTable", "PK", "KEK", "db", "dbx")
+
+# Labels a baseline may use for the EV_EFI_GPT_EVENT digest. Baselines
+# extracted by this tool omit it, since it is computed from --disk instead.
+_GPT_LABELS = ("GPT", "EV_EFI_GPT_EVENT")
+
 EFI_ACTION_DIGESTS = {
     name: hashlib.sha384(name.encode("ascii")).digest()
     for name in [
@@ -145,31 +152,43 @@ def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:
       14. Boot0002                   (baseline event)
       15. Boot0003                   (baseline event)
       16. Boot0000                   (baseline event)
+
+    The five fixed events are looked up by label so that a baseline whose
+    events are ordered differently fails loudly instead of replaying the
+    wrong digest in the wrong slot. The trailing ACPI and Boot events keep
+    their baseline order, which is the order firmware measured them in.
     """
     baseline_events = baseline.rtmr_events(0)
-    if len(baseline_events) < 5:
-        raise ValueError(
-            f"RTMR[0] baseline requires at least 5 events (TdxTable + PK/KEK/db/dbx), got {len(baseline_events)}"
-        )
-    cfv_digest = hashlib.sha384(firmware[0:0x20000]).digest()
+    by_label: dict[str, str] = {}
+    for event in baseline_events:
+        by_label.setdefault(event.label, event.digest)
 
+    missing = [label for label in _RTMR0_FIXED_LABELS if label not in by_label]
+    if missing:
+        raise ValueError(
+            f"RTMR[0] baseline is missing required event(s): {', '.join(missing)}"
+        )
+
+    cfv_digest = hashlib.sha384(firmware[0:0x20000]).digest()
     sb_flag_data = b"\x01" if baseline.secureboot_enabled else b"\x00"
     sb_flag_digest = compute_secureboot_digest("SecureBoot", sb_flag_data)
 
-    digests: list[bytes] = []
-    bi = 0
-
-    digests.append(bytes.fromhex(baseline_events[bi].digest))
-    bi += 1
-    digests.append(cfv_digest)
-    digests.append(sb_flag_digest)
-    for _ in range(4):
-        digests.append(bytes.fromhex(baseline_events[bi].digest))
-        bi += 1
-    digests.append(SEPARATOR_DIGEST)
-    while bi < len(baseline_events):
-        digests.append(bytes.fromhex(baseline_events[bi].digest))
-        bi += 1
+    fixed = set(_RTMR0_FIXED_LABELS)
+    digests = [
+        bytes.fromhex(by_label["TdxTable"]),
+        cfv_digest,
+        sb_flag_digest,
+        bytes.fromhex(by_label["PK"]),
+        bytes.fromhex(by_label["KEK"]),
+        bytes.fromhex(by_label["db"]),
+        bytes.fromhex(by_label["dbx"]),
+        SEPARATOR_DIGEST,
+        *(
+            bytes.fromhex(event.digest)
+            for event in baseline_events
+            if event.label not in fixed
+        ),
+    ]
 
     return replay_digests(digests).hex()
 
@@ -187,20 +206,31 @@ def _compute_rtmr1(
       5. Kernel PE Authenticode hash                   (computed from UKI .linux)
       6. "Exit Boot Services Invocation"               (computed constant)
       7. "Exit Boot Services Returned with Success"    (computed constant)
+
+    A UKI without a .linux section is measured as its own kernel, since the
+    whole image is then the kernel that firmware hands off to.
     """
     if gpt_digest_hex is not None:
         gpt_digest = bytes.fromhex(gpt_digest_hex)
     else:
-        baseline_events = baseline.rtmr_events(1)
-        if len(baseline_events) < 1:
+        gpt_event = next(
+            (e for e in baseline.rtmr_events(1) if e.label in _GPT_LABELS), None
+        )
+        if gpt_event is None:
             raise ValueError(
-                "RTMR[1] requires a GPT hash from --disk or a legacy baseline GPT event"
+                "RTMR[1] requires the EV_EFI_GPT_EVENT digest, which depends on the "
+                "disk layout. Pass --disk to compute it from the pod VM image, or "
+                "use a legacy baseline that still carries a GPT event."
             )
-        gpt_digest = bytes.fromhex(baseline_events[0].digest)
+        gpt_digest = bytes.fromhex(gpt_event.digest)
 
     uki_auth = pe_authenticode_digest(uki, "sha384")
     kernel_data = pe_extract_section(uki, ".linux", use_virtual_size=True)
-    kernel_auth = pe_authenticode_digest(kernel_data, "sha384") if kernel_data else uki_auth
+    kernel_auth = (
+        pe_authenticode_digest(kernel_data, "sha384")
+        if kernel_data is not None
+        else uki_auth
+    )
 
     digests = [
         EFI_ACTION_DIGESTS["Calling EFI Application from Boot Option"],

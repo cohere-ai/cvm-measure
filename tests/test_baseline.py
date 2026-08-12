@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import struct
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from cvm_measure.tdx.baseline import (
     Baseline,
     BaselineEvent,
     _infer_provider,
+    _secureboot_value,
     load,
     save,
 )
@@ -57,6 +59,37 @@ class TestBaselineLoad:
 
     def test_firmware_sha384(self, baseline_a3) -> None:
         assert len(baseline_a3.firmware_sha384) == 96
+
+
+class TestSecureBootValue:
+    """UEFI 2.10 §3.3 defines SecureBoot as a single UINT8."""
+
+    @staticmethod
+    def _variable_data(data: bytes, *, declared_len: int | None = None) -> bytes:
+        name = "SecureBoot"
+        return (
+            bytes(16)
+            + struct.pack("<Q", len(name))
+            + struct.pack("<Q", len(data) if declared_len is None else declared_len)
+            + name.encode("utf-16-le")
+            + data
+        )
+
+    def test_enabled(self) -> None:
+        assert _secureboot_value(self._variable_data(b"\x01")) is True
+
+    def test_disabled(self) -> None:
+        assert _secureboot_value(self._variable_data(b"\x00")) is False
+
+    def test_zero_length_is_not_enabled(self) -> None:
+        assert _secureboot_value(self._variable_data(b"")) is False
+
+    def test_multi_byte_is_not_enabled(self) -> None:
+        assert _secureboot_value(self._variable_data(bytes(4))) is False
+
+    def test_truncated_is_not_enabled(self) -> None:
+        truncated = self._variable_data(b"", declared_len=1)
+        assert _secureboot_value(truncated) is False
 
 
 class TestInferProvider:

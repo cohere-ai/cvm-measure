@@ -94,6 +94,32 @@ class TestRTMR0FromCCEL:
         rtmr0 = replay_digests(digests).hex()
         assert rtmr0 == golden_a3.rtmr0
 
+    def test_rtmr0_is_order_independent_for_fixed_events(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        """TdxTable/PK/KEK/db/dbx are addressed by label, not position."""
+        expected = compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234).rtmr0
+
+        fixed = {"TdxTable", "PK", "KEK", "db", "dbx"}
+        reordered = [e for e in baseline_a3.events if e.label in fixed]
+        reordered.reverse()
+        baseline_a3.events = reordered + [
+            e for e in baseline_a3.events if e.label not in fixed
+        ]
+
+        actual = compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234).rtmr0
+        assert actual == expected
+
+    def test_rtmr0_rejects_baseline_missing_fixed_event(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        import pytest
+
+        baseline_a3.events = [e for e in baseline_a3.events if e.label != "dbx"]
+
+        with pytest.raises(ValueError, match="missing required event"):
+            compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+
 
 class TestRTMR1FromCCEL:
 
@@ -153,7 +179,27 @@ class TestRTMR1FromCCEL:
 
         baseline_a3.events = [e for e in baseline_a3.events if e.rtmr != 1]
 
-        with pytest.raises(ValueError, match="GPT hash"):
+        with pytest.raises(ValueError, match="--disk"):
+            compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+
+    def test_rtmr1_does_not_mistake_another_event_for_gpt(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        """A non-GPT RTMR[1] event must not be replayed in the GPT slot."""
+        import pytest
+
+        from cvm_measure.tdx.baseline import BaselineEvent
+
+        baseline_a3.events = [e for e in baseline_a3.events if e.rtmr != 1] + [
+            BaselineEvent(
+                rtmr=1,
+                event_type="EV_EFI_VARIABLE_BOOT",
+                label="BootOrder",
+                digest="cc" * 48,
+            )
+        ]
+
+        with pytest.raises(ValueError, match="--disk"):
             compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
 
 
