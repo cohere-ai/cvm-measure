@@ -137,6 +137,49 @@ class TestComputeGptDigest:
             assert compute_gpt_digest(archive) == self._expected(header, entries)
 
 
+class TestTarExtraction:
+    """A pod VM archive is untrusted input; it must not write outside tmpdir."""
+
+    def test_rejects_path_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            payload = tmp / "payload"
+            payload.write_bytes(b"pwned")
+
+            archive = tmp / "evil.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                tar.add(payload, arcname="../escaped.raw")
+
+            with pytest.raises(ValueError, match="path traversal"):
+                compute_gpt_digest(archive)
+
+    def test_rejects_symlink_member(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            archive = tmp / "evil.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                link = tarfile.TarInfo("disk.raw")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "/etc/passwd"
+                tar.addfile(link)
+
+            with pytest.raises(ValueError, match="not a regular file"):
+                compute_gpt_digest(archive)
+
+    def test_rejects_archive_without_raw_member(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            dummy = tmp / "readme.txt"
+            dummy.write_text("not a disk")
+
+            archive = tmp / "archive.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                tar.add(dummy, arcname="readme.txt")
+
+            with pytest.raises(ValueError, match="No member ending in '.raw'"):
+                compute_gpt_digest(archive)
+
+
 class TestFindEspOffset:
     def test_standard_lba(self):
         disk = _build_gpt_disk(bytes(4096 * 512), esp_lba=2048)

@@ -23,6 +23,7 @@ Requires: mtools (``apt install mtools`` / ``brew install mtools``).
 from __future__ import annotations
 
 import hashlib
+import shutil
 import struct
 import subprocess
 import tarfile
@@ -125,40 +126,48 @@ def compute_gpt_digest(disk: str | Path) -> bytes:
     return hashlib.sha384(event_data).digest()
 
 
-# PEP 706 added tarfile extraction filters in 3.12 and backported them to
-# 3.10.12 / 3.11.4. Older 3.10 patch releases raise TypeError on filter=.
-_HAS_TAR_DATA_FILTER = hasattr(tarfile, "data_filter")
-
-
-def _reject_unsafe_member(member: tarfile.TarInfo) -> None:
-    """Approximate the 'data' filter for interpreters that predate PEP 706."""
-    if not member.isfile():
-        raise ValueError(f"Refusing to extract {member.name!r}: not a regular file")
-    if member.mode is not None and member.mode & 0o7000:
-        raise ValueError(f"Refusing to extract {member.name!r}: setuid/setgid/sticky bit set")
-
-
 def _resolve_raw_disk(disk_path: Path) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
-    """If disk_path is a .tar.gz, extract the raw image; otherwise return as-is."""
+    """If disk_path is a .tar.gz, extract the raw image; otherwise return as-is.
+
+    The member is copied out by hand rather than through TarFile.extract, so
+    the only path ever written is the validated one. That keeps a hostile
+    archive from escaping the temporary directory via traversal, symlinks or
+    device nodes, and avoids TarFile.extract's filter= argument, which older
+    3.10 interpreters predate.
+    """
     suffixes = "".join(disk_path.suffixes).lower()
     if not suffixes.endswith((".tar.gz", ".tgz")):
         return disk_path, None
 
     tmpdir = tempfile.TemporaryDirectory()
-    dest = Path(tmpdir.name)
-    with tarfile.open(disk_path) as tar:
-        for member in tar:
-            if member.name.endswith(".raw") or member.name == "disk.raw":
+    dest = Path(tmpdir.name).resolve()
+    try:
+        with tarfile.open(disk_path) as tar:
+            for member in tar:
+                if not member.name.endswith(".raw"):
+                    continue
+                if not member.isfile():
+                    raise ValueError(
+                        f"Refusing to extract {member.name!r}: not a regular file"
+                    )
+
                 resolved = (dest / member.name).resolve()
-                if not resolved.is_relative_to(dest.resolve()):
-                    tmpdir.cleanup()
-                    raise ValueError(f"Refusing to extract {member.name!r}: path traversal detected")
-                if _HAS_TAR_DATA_FILTER:
-                    tar.extract(member, path=dest, filter="data")
-                else:
-                    _reject_unsafe_member(member)
-                    tar.extract(member, path=dest)  # nosec B202 - member vetted above
+                if not resolved.is_relative_to(dest):
+                    raise ValueError(
+                        f"Refusing to extract {member.name!r}: path traversal detected"
+                    )
+
+                source = tar.extractfile(member)
+                if source is None:
+                    raise ValueError(f"Cannot read {member.name!r} from {disk_path}")
+
+                resolved.parent.mkdir(parents=True, exist_ok=True)
+                with source, open(resolved, "wb") as out:
+                    shutil.copyfileobj(source, out)
                 return resolved, tmpdir
+    except Exception:
+        tmpdir.cleanup()
+        raise
 
     tmpdir.cleanup()
     raise ValueError(f"No member ending in '.raw' found in {disk_path}")
