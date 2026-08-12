@@ -339,6 +339,14 @@ class TestCfvImage:
         with pytest.raises(ValueError, match="past the end"):
             cfv_image(firmware)
 
+    def test_rejects_cfv_mapped_larger_than_the_image(self) -> None:
+        """memory_size is a UINT64 and the zero fill allocates it."""
+        firmware = build_firmware([
+            (TDX_SECTION_CFV, 0, 0x1000, 0xFFE00000, 0xFFFFFFFFFFFF, 0),
+        ])
+        with pytest.raises(ValueError, match="more than the"):
+            cfv_image(firmware)
+
     def test_rejects_cfv_larger_than_its_memory_region(self) -> None:
         firmware = build_firmware([
             (TDX_SECTION_CFV, 0, 0x2000, 0xFFE00000, 0x1000, 0),

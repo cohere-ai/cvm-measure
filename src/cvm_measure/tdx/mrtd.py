@@ -220,6 +220,14 @@ def cfv_image(firmware: bytes) -> bytes:
             f"Firmware TDX metadata describes an unusable CFV: {cfv.data_size} "
             f"byte(s) of data in a {cfv.memory_size}-byte memory region"
         )
+    # memory_size is an attacker-controlled UINT64, and the zero fill below
+    # allocates it. A flash volume is mapped from the image, so it cannot be
+    # larger than the image itself.
+    if cfv.memory_size > len(firmware):
+        raise ValueError(
+            f"Firmware TDX metadata maps the CFV to 0x{cfv.memory_size:X} byte(s), "
+            f"more than the {len(firmware)}-byte image it comes from"
+        )
     if end > len(firmware):
         raise ValueError(
             f"Firmware TDX metadata places the CFV at 0x{cfv.data_offset:X} + "
