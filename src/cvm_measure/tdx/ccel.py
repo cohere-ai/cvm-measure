@@ -135,14 +135,23 @@ _PADDING_BYTES = (0xFF, 0x00)
 
 
 class _Cursor:
-    """Sequential reader that refuses to read past the end of its buffer."""
+    """Sequential reader that refuses to read past the end of its buffer.
 
-    __slots__ = ("_data", "_offset", "_what")
+    Reads normally stop at `limit`, the offset where the table's fill begins,
+    so the fill cannot satisfy a length the log declares. `_require` documents
+    the one crossing that is allowed and the fields excluded from it.
+    """
 
-    def __init__(self, data: bytes, what: str) -> None:
+    __slots__ = ("_data", "_fill", "_limit", "_offset", "_what")
+
+    def __init__(
+        self, data: bytes, what: str, limit: int | None = None, fill: int | None = None
+    ) -> None:
         self._data = data
         self._offset = 0
         self._what = what
+        self._limit = len(data) if limit is None else limit
+        self._fill = fill
 
     @property
     def offset(self) -> int:
@@ -150,14 +159,32 @@ class _Cursor:
 
     @property
     def remaining(self) -> int:
+        """Bytes before the fill boundary, which is where events stop."""
+        return max(self._limit - self._offset, 0)
+
+    @property
+    def in_buffer(self) -> int:
+        """Bytes before the end of the buffer, fill included."""
         return len(self._data) - self._offset
 
-    def _require(self, size: int, field: str) -> None:
-        if size > self.remaining:
-            raise ValueError(
-                f"{self._what} truncated at offset {self._offset}: {field} needs "
-                f"{size} byte(s), {self.remaining} remain"
-            )
+    def _require(self, size: int, field: str, strict: bool = False) -> None:
+        if size <= self.remaining:
+            return
+        # The boundary is found by stripping fill from the end, so it lands
+        # early whenever a real field ends in fill-valued bytes: a zero-filled
+        # table hides the top bytes of an EventSize like 0x00000008, and the
+        # last event's data can end in fill. Such a read may cross into bytes
+        # that are all fill. Digests are read strictly instead, because a
+        # digest completed out of the fill is one this tool would go on to
+        # replay or write into a baseline as though the log had carried it.
+        if not strict and self._fill is not None and size <= self.in_buffer:
+            spill = self._data[max(self._offset, self._limit) : self._offset + size]
+            if spill.count(self._fill) == len(spill):
+                return
+        raise ValueError(
+            f"{self._what} truncated at offset {self._offset}: {field} needs "
+            f"{size} byte(s), {self.in_buffer} remain"
+        )
 
     def u8(self, field: str) -> int:
         self._require(1, field)
@@ -177,8 +204,8 @@ class _Cursor:
         self._offset += 4
         return value
 
-    def take(self, size: int, field: str) -> bytes:
-        self._require(size, field)
+    def take(self, size: int, field: str, strict: bool = False) -> bytes:
+        self._require(size, field, strict)
         value = self._data[self._offset : self._offset + size]
         self._offset += size
         return value
@@ -194,11 +221,11 @@ class _Cursor:
         Without this, a count of 0xFFFFFFFF would spin through billions of
         iterations before the first out-of-bounds read stopped it.
         """
-        if count * item_size > self.remaining:
+        if count * item_size > self.in_buffer:
             raise ValueError(
                 f"{self._what} declares {count} {field} at offset {self._offset}, "
                 f"needing at least {count * item_size} byte(s) of the "
-                f"{self.remaining} that remain"
+                f"{self.in_buffer} that remain"
             )
         return count
 
@@ -206,18 +233,25 @@ class _Cursor:
         return self._data[self._offset :]
 
 
-def _padding_start(data: bytes) -> int:
-    """Offset where the table's trailing fill begins, or len(data) if none."""
+def _padding_start(data: bytes) -> tuple[int, int | None]:
+    """Where the table's trailing fill begins, and the byte it repeats."""
     for pad in _PADDING_BYTES:
         stripped = data.rstrip(bytes([pad]))
         if len(stripped) != len(data):
-            return len(stripped)
-    return len(data)
+            return len(stripped), pad
+    return len(data), None
 
 
 def _require_only_padding(cursor: _Cursor) -> None:
-    """Refuse a log with unexplained bytes after its last event."""
+    """Refuse a log with unexplained bytes after its last event.
+
+    What may follow the events is a terminator, table fill, or a terminator
+    ahead of fill, which is what a zero-filled table holding a terminated log
+    looks like.
+    """
     tail = cursor.tail()
+    if tail[:4] == struct.pack("<I", LOG_TERMINATOR):
+        tail = tail[4:]
     if not tail or any(tail.count(pad) == len(tail) for pad in _PADDING_BYTES):
         return
     raise ValueError(
@@ -249,14 +283,16 @@ def parse_event_log(data: bytes) -> ParsedEventLog:
     if len(data) < _SPEC_ID_HEADER_SIZE:
         raise ValueError(f"Event log too short ({len(data)} bytes)")
 
-    cursor = _Cursor(data, "Event log")
+    # Events stop at the TCG terminator, or where the table's fill begins for
+    # firmware that writes no terminator at all. The cursor knows the boundary
+    # too, so a field the log overstates cannot be completed out of the fill.
+    body_end, fill = _padding_start(data)
+    cursor = _Cursor(data, "Event log", limit=body_end, fill=fill)
+
     entry, digest_sizes = _parse_spec_id_event(cursor, 0)
     result = ParsedEventLog(digest_sizes=digest_sizes, events=[entry])
     algo_sizes = dict(digest_sizes)
 
-    # Events stop at the TCG terminator, or where the table's fill begins for
-    # firmware that writes no terminator at all.
-    body_end = _padding_start(data)
     index = 1
     while cursor.offset < body_end and cursor.remaining >= _EVENT2_HEADER_SIZE:
         if cursor.peek_u32("MrIndex") == LOG_TERMINATOR:
@@ -274,7 +310,7 @@ def _parse_spec_id_event(
     """Parse the first event (TCG_PCClientPCREvent with 20-byte legacy digest)."""
     mr_index = cursor.u32("MrIndex")
     event_type = cursor.u32("EventType")
-    legacy_digest = cursor.take(20, "legacy digest")
+    legacy_digest = cursor.take(20, "legacy digest", strict=True)
     event_size = cursor.u32("EventSize")
     event_data = cursor.take(event_size, "SpecIdEvent payload")
 
@@ -363,7 +399,7 @@ def _parse_event2(
                 f"Event at offset {algo_offset} repeats algorithm 0x{algo_id:04X}"
             )
 
-        digests[algo_id] = cursor.take(dsz, f"0x{algo_id:04X} digest")
+        digests[algo_id] = cursor.take(dsz, f"0x{algo_id:04X} digest", strict=True)
 
     event_size = cursor.u32("EventSize")
     event_data = cursor.take(event_size, "event data")

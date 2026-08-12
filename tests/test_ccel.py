@@ -114,9 +114,67 @@ class TestCCELParser:
         log = parse_event_log(data)
         assert len(log.events) == 2
 
+    @pytest.mark.parametrize("pad", [b"\xff", b"\x00"])
+    def test_accepts_terminator_ahead_of_table_padding(self, pad: bytes) -> None:
+        """A terminated log in a zero-filled table ends in two kinds of byte."""
+        data = (
+            build_spec_id_event()
+            + build_event2()
+            + struct.pack("<I", 0xFFFFFFFF)
+            + pad * 4096
+        )
+        log = parse_event_log(data)
+        assert len(log.events) == 2
+
+    @pytest.mark.parametrize("pad", [b"\xff", b"\x00"])
+    def test_accepts_final_event_data_ending_in_fill_bytes(self, pad: bytes) -> None:
+        """Stripping fill to find the boundary can cut into real event data."""
+        data = build_spec_id_event() + build_event2(event_data=pad * 8) + pad * 4096
+        log = parse_event_log(data)
+        assert log.events[-1].event_data == pad * 8
+
 
 class TestDeclaredLengthValidation:
     """Declared lengths and counts are untrusted: slices must not truncate."""
+
+    @pytest.mark.parametrize("pad", [b"\xff", b"\x00"])
+    def test_rejects_digest_count_completed_out_of_table_padding(
+        self, pad: bytes
+    ) -> None:
+        """Table fill must not stand in for digests the log does not carry."""
+        data = (
+            build_spec_id_event()
+            + build_event2(
+                digests=[(TPM_ALG_SHA384, bytes(48))], declared_digest_count=2
+            )
+            + pad * 4096
+        )
+        with pytest.raises(ValueError, match="truncated|declares"):
+            parse_event_log(data)
+
+    @pytest.mark.parametrize("pad", [b"\xff", b"\x00"])
+    def test_rejects_event_header_completed_out_of_table_padding(
+        self, pad: bytes
+    ) -> None:
+        data = build_spec_id_event() + build_event2()[:20] + pad * 4096
+        with pytest.raises(ValueError, match="truncated|declares"):
+            parse_event_log(data)
+
+    def test_rejects_final_digest_that_ends_where_the_fill_begins(self) -> None:
+        """Refusing a fill-completed digest costs one improbable real log.
+
+        A last event with empty data and a digest ending in the fill byte is
+        indistinguishable from a digest the fill completed, so it is refused
+        rather than replayed. It takes a zero-filled table, an empty final
+        EventSize, and a digest ending in 0x00 to reach this.
+        """
+        data = (
+            build_spec_id_event()
+            + build_event2(digests=[(TPM_ALG_SHA384, bytes(48))], event_data=b"")
+            + b"\x00" * 4096
+        )
+        with pytest.raises(ValueError, match="digest needs 48 byte"):
+            parse_event_log(data)
 
     def test_rejects_partial_trailing_event_header(self) -> None:
         data = build_spec_id_event() + build_event2()[:8]

@@ -212,7 +212,9 @@ what is modelled raises instead of producing a plausible answer:
   then depends on the profile selected at boot), or repeating a section
   systemd measures.
 - A CCEL that is truncated, declares a length or count its buffer cannot hold,
-  or carries unexplained bytes after its last event.
+  or carries unexplained bytes after its last event. The unused tail of the ACPI
+  table is not a source of event bytes: a digest is refused if it reaches into
+  the fill, so a truncated log cannot be completed with fill and replayed.
 - A NUMA topology whose per-node cap cannot hold the requested RAM.
 
 ### What this tool does NOT cover
