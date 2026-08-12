@@ -193,6 +193,42 @@ def _parse_tdx_metadata(firmware: bytes) -> TDXMetadata:
     return TDXMetadata(version=version, sections=sections)
 
 
+def cfv_image(firmware: bytes) -> bytes:
+    """Return the configuration firmware volume as the guest receives it.
+
+    RTMR[0] records SHA-384 over the CFV. Where the CFV lives is described by
+    the firmware's own TDX metadata rather than fixed by the platform, so it is
+    read from there: firmware laid out differently from the build this was
+    developed against would otherwise be measured over the wrong bytes and
+    produce a plausible but wrong register.
+
+    The volume is the section's file bytes zero-filled out to its memory size,
+    which is what the VMM maps.
+    """
+    metadata = _parse_tdx_metadata(firmware)
+    sections = [s for s in metadata.sections if s.section_type == TDX_SECTION_CFV]
+    if len(sections) != 1:
+        raise ValueError(
+            f"Firmware TDX metadata describes {len(sections)} CFV section(s); "
+            "RTMR[0] needs exactly one to measure"
+        )
+
+    cfv = sections[0]
+    end = cfv.data_offset + cfv.data_size
+    if cfv.memory_size == 0 or cfv.data_size > cfv.memory_size:
+        raise ValueError(
+            f"Firmware TDX metadata describes an unusable CFV: {cfv.data_size} "
+            f"byte(s) of data in a {cfv.memory_size}-byte memory region"
+        )
+    if end > len(firmware):
+        raise ValueError(
+            f"Firmware TDX metadata places the CFV at 0x{cfv.data_offset:X} + "
+            f"0x{cfv.data_size:X}, past the end of a {len(firmware)}-byte image"
+        )
+
+    return firmware[cfv.data_offset : end].ljust(cfv.memory_size, b"\x00")
+
+
 # -- Guest physical region types -----------------------------------------------
 
 

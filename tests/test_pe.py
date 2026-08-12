@@ -24,6 +24,7 @@ from cvm_measure.tdx.pe import (
     MAX_VIRTUAL_PADDING_BYTES,
     pe_authenticode_digest,
     pe_extract_section,
+    pe_section_names,
 )
 
 _PE_OFFSET = 0x80
@@ -99,6 +100,27 @@ class TestPEValidation:
         data = b"MZ" + b"\x00" * 62
         with pytest.raises(ValueError, match="PE signature"):
             pe_authenticode_digest(data)
+
+
+class TestPESectionNames:
+
+    def test_lists_names_in_table_order_with_duplicates(self) -> None:
+        pe = build_pe([
+            (".linux", 16, 512, b"kernel"),
+            (".cmdline", 16, 512, b"quiet"),
+            (".cmdline", 16, 512, b"debug"),
+        ])
+        assert pe_section_names(pe) == [".linux", ".cmdline", ".cmdline"]
+
+    def test_not_pe_raises(self) -> None:
+        with pytest.raises(ValueError, match="MZ"):
+            pe_section_names(b"not a pe file")
+
+    def test_truncated_section_table_raises(self) -> None:
+        pe = build_pe([(".linux", 16, 512, b"kernel")])
+        sec_table_off = _PE_OFFSET + 4 + 20 + _OPT_HDR_SIZE
+        with pytest.raises(ValueError, match="section table runs past"):
+            pe_section_names(pe[: sec_table_off + 8])
 
 
 class TestPEAuthenticode:

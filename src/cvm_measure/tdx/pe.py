@@ -139,6 +139,26 @@ def pe_authenticode_digest(pe_data: bytes, algo: str = "sha384") -> bytes:
     return h.digest()
 
 
+def pe_section_names(pe_data: bytes) -> list[str]:
+    """List section names in section-table order, including any duplicates."""
+    header = _parse_pe_header(pe_data)
+    if header is None:
+        raise ValueError("Not a valid PE file (missing MZ or PE signature)")
+
+    _, num_sections, sec_table_off = header
+    names = []
+    for i in range(num_sections):
+        so = sec_table_off + i * 40
+        if so + 40 > len(pe_data):
+            raise ValueError(
+                f"PE section table runs past the end of the image at offset {so}"
+            )
+        names.append(
+            pe_data[so : so + 8].split(b"\x00", 1)[0].decode("ascii", errors="replace")
+        )
+    return names
+
+
 def pe_extract_section(
     pe_data: bytes,
     section_name: str,

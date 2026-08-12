@@ -32,38 +32,42 @@ import struct
 from dataclasses import dataclass
 
 from .baseline import Baseline
-from .mrtd import compute_mrtd
-from .pe import pe_authenticode_digest, pe_extract_section
+from .mrtd import cfv_image, compute_mrtd
+from .pe import pe_authenticode_digest, pe_extract_section, pe_section_names
 from .rtmr import SHA384_SIZE, replay_digests
 from .uefi import compute_secureboot_digest
 
-# The sections the CAA pod VM UKI carries, in the order systemd-stub measures
-# them. This is a subset of systemd's canonical list, which is fine only
-# because the current image carries nothing else that gets measured.
+# systemd's canonical measurement order for UKI sections, from the
+# UnifiedSection enum in src/fundamental/uki.h ("PLEASE DO NOT REORDER").
+# systemd-stub walks the enum and measures every section it finds, so the list
+# has to be complete: a section missing from here would be skipped silently and
+# RTMR[2] would come out wrong rather than absent.
 UKI_MEASURED_SECTIONS = [
     ".linux",
     ".osrel",
     ".cmdline",
     ".initrd",
     ".ucode",
-    ".uname",
-    ".sbat",
-    ".pcrpkey",
-]
-
-# systemd-stub also measures these when present, interleaved with the list
-# above rather than appended to it. Emitting RTMR[2] without them would be
-# silently wrong, so refuse instead.
-# TODO(CC-167): model systemd's full canonical section list and ordering so
-# any UKI can be measured rather than just the current CAA image.
-UKI_UNSUPPORTED_SECTIONS = [
     ".splash",
     ".dtb",
-    ".dtbauto",
+    ".uname",
+    ".sbat",
+    # .pcrsig sits here in the enum. It signs the expected result of the
+    # measurement, so systemd is careful not to feed it back in.
+    ".pcrpkey",
     ".profile",
+    ".dtbauto",
     ".hwids",
     ".efifw",
 ]
+
+UKI_UNMEASURED_SECTION = ".pcrsig"
+
+# .profile keeps its place in the canonical order above, but a UKI that carries
+# one is refused rather than measured: profiles repeat section names, one group
+# per profile, and systemd-stub measures the group the profile selected at boot
+# resolves to. Which group that is cannot be decided from the image alone.
+UKI_PROFILE_SECTION = ".profile"
 
 SEPARATOR_DIGEST = hashlib.sha384(struct.pack("<I", 0)).digest()
 
@@ -208,7 +212,7 @@ def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:
 
     Event order (16 total):
       1.  TdxTable                    (baseline event)
-      2.  CFV = SHA-384(fw[0:0x20000]) (computed from firmware)
+      2.  CFV = SHA-384(CFV region)    (located via firmware TDX metadata)
       3.  SecureBoot                  (computed from secureboot_enabled flag)
       4.  PK                         (baseline event)
       5.  KEK                        (baseline event)
@@ -258,7 +262,7 @@ def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:
             "order has to match the firmware that produced them."
         )
 
-    cfv_digest = hashlib.sha384(firmware[0:0x20000]).digest()
+    cfv_digest = hashlib.sha384(cfv_image(firmware)).digest()
     sb_flag_data = b"\x01" if baseline.secureboot_enabled else b"\x00"
     sb_flag_digest = compute_secureboot_digest("SecureBoot", sb_flag_data)
 
@@ -294,8 +298,10 @@ def _compute_rtmr1(
       6. "Exit Boot Services Invocation"               (computed constant)
       7. "Exit Boot Services Returned with Success"    (computed constant)
 
-    A UKI without a .linux section is measured as its own kernel, since the
-    whole image is then the kernel that firmware hands off to.
+    Event 5 is the kernel systemd-stub loads out of the UKI's .linux section,
+    which firmware measures as a second boot application. A UKI without that
+    section boots some other way and produces a different event sequence, so
+    it is rejected rather than measured as if it were its own kernel.
     """
     if gpt_digest_hex is not None:
         gpt_digest = _digest_from_hex(gpt_digest_hex, "GPT digest")
@@ -313,11 +319,13 @@ def _compute_rtmr1(
 
     uki_auth = pe_authenticode_digest(uki, "sha384")
     kernel_data = pe_extract_section(uki, ".linux", use_virtual_size=True)
-    kernel_auth = (
-        pe_authenticode_digest(kernel_data, "sha384")
-        if kernel_data is not None
-        else uki_auth
-    )
+    if kernel_data is None:
+        raise ValueError(
+            "UKI has no .linux section, so there is no embedded kernel for "
+            "firmware to measure as the second boot application. RTMR[1] for a "
+            "boot chain like that is not something this tool can reconstruct."
+        )
+    kernel_auth = pe_authenticode_digest(kernel_data, "sha384")
 
     digests = [
         EFI_ACTION_DIGESTS["Calling EFI Application from Boot Option"],
@@ -335,21 +343,12 @@ def _compute_rtmr1(
 def _compute_rtmr2(uki: bytes) -> str:
     """Compute RTMR[2] entirely from UKI PE sections. No baseline needed.
 
-    systemd-stub measures each section as two events:
+    systemd-stub measures each section it recognises as two events, in the
+    canonical order of UKI_MEASURED_SECTIONS:
       1. SHA-384(section_name + '\\0')
       2. SHA-384(section_content)
     """
-    unsupported = [
-        name
-        for name in UKI_UNSUPPORTED_SECTIONS
-        if pe_extract_section(uki, name) is not None
-    ]
-    if unsupported:
-        raise ValueError(
-            f"UKI carries section(s) {', '.join(unsupported)}, which systemd-stub "
-            "measures into RTMR[2] but this tool does not model yet. The result "
-            "would be silently wrong, so refusing to compute it."
-        )
+    _reject_unmodelled_uki(uki)
 
     digests = []
     for section_name in UKI_MEASURED_SECTIONS:
@@ -360,3 +359,29 @@ def _compute_rtmr2(uki: bytes) -> str:
         digests.append(hashlib.sha384(content).digest())
 
     return replay_digests(digests).hex()
+
+
+def _reject_unmodelled_uki(uki: bytes) -> None:
+    """Refuse a UKI whose measured section sequence is not the canonical one."""
+    names = pe_section_names(uki)
+    if UKI_PROFILE_SECTION in names:
+        raise ValueError(
+            f"UKI carries a {UKI_PROFILE_SECTION} section, so what gets measured "
+            "into RTMR[2] depends on which profile is selected at boot. This tool "
+            "measures a single section sequence, so refusing rather than modelling "
+            "one arbitrary profile."
+        )
+
+    repeated = sorted(
+        {
+            name
+            for name in names
+            if name in UKI_MEASURED_SECTIONS and names.count(name) > 1
+        }
+    )
+    if repeated:
+        raise ValueError(
+            f"UKI repeats measured section(s) {', '.join(repeated)}. systemd-stub "
+            "measures one of each, and which one is not decidable from the image "
+            "alone, so refusing to compute RTMR[2]."
+        )

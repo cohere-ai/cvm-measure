@@ -20,6 +20,13 @@ The log records every RTMR extend operation performed during boot.
 Binary format follows the TCG PC Client Platform Firmware Profile:
   - First event: TCG_PCClientPCREvent (spec ID header, 20-byte legacy digest)
   - Subsequent events: TCG_PCR_EVENT2 (multi-algorithm digests)
+
+A CCEL describes a boot this tool did not observe, so every length and count
+in it is untrusted. Reads go through a cursor that validates each one against
+the bytes that remain, because a Python slice truncates silently: an
+unchecked read turns a malformed log into a short digest or a skipped event
+rather than an error, and a baseline extracted from it would be quietly
+incomplete.
 """
 
 from __future__ import annotations
@@ -37,6 +44,8 @@ ALGO_DIGEST_SIZES: dict[int, int] = {
     0x000C: 48,  # SHA-384
     0x000D: 64,  # SHA-512
 }
+
+MAX_DIGEST_SIZE: int = 64
 
 # -- TCG Event Types -----------------------------------------------------------
 
@@ -102,119 +111,274 @@ class ParsedEventLog:
         ]
 
 
+# -- Bounds-checked reading ----------------------------------------------------
+
+SPEC_ID_SIGNATURE = b"Spec ID Event03\x00"
+LOG_TERMINATOR = 0xFFFFFFFF
+
+# MrIndex is the RTMR index plus one. Index 0 belongs to the informational
+# EV_NO_ACTION records at the head of the log, which are never extended.
+MAX_MR_INDEX = 4
+
+# TCG_PCR_EVENT2 header: MrIndex + EventType + DigestCount.
+_EVENT2_HEADER_SIZE = 12
+# TCG_PCClientPCREvent header: MrIndex + EventType + 20-byte digest + EventSize.
+_SPEC_ID_HEADER_SIZE = 32
+# SpecIdEvent fields ahead of NumberOfAlgorithms: signature, PlatformClass,
+# and one byte each of spec minor, major, errata, and uintnSize.
+_SPEC_ID_ALGO_COUNT_OFFSET = 24
+
+# The CCEL ACPI table is allocated larger than the log it carries, and firmware
+# leaves the unused tail at the flash erase value. A zero-filled tail shows up
+# in logs copied out of a zeroed buffer.
+_PADDING_BYTES = (0xFF, 0x00)
+
+
+class _Cursor:
+    """Sequential reader that refuses to read past the end of its buffer."""
+
+    __slots__ = ("_data", "_offset", "_what")
+
+    def __init__(self, data: bytes, what: str) -> None:
+        self._data = data
+        self._offset = 0
+        self._what = what
+
+    @property
+    def offset(self) -> int:
+        return self._offset
+
+    @property
+    def remaining(self) -> int:
+        return len(self._data) - self._offset
+
+    def _require(self, size: int, field: str) -> None:
+        if size > self.remaining:
+            raise ValueError(
+                f"{self._what} truncated at offset {self._offset}: {field} needs "
+                f"{size} byte(s), {self.remaining} remain"
+            )
+
+    def u8(self, field: str) -> int:
+        self._require(1, field)
+        value = self._data[self._offset]
+        self._offset += 1
+        return value
+
+    def u16(self, field: str) -> int:
+        self._require(2, field)
+        value: int = struct.unpack_from("<H", self._data, self._offset)[0]
+        self._offset += 2
+        return value
+
+    def u32(self, field: str) -> int:
+        self._require(4, field)
+        value: int = struct.unpack_from("<I", self._data, self._offset)[0]
+        self._offset += 4
+        return value
+
+    def take(self, size: int, field: str) -> bytes:
+        self._require(size, field)
+        value = self._data[self._offset : self._offset + size]
+        self._offset += size
+        return value
+
+    def peek_u32(self, field: str) -> int:
+        self._require(4, field)
+        value: int = struct.unpack_from("<I", self._data, self._offset)[0]
+        return value
+
+    def bounded_count(self, count: int, item_size: int, field: str) -> int:
+        """Reject a declared count too large for the bytes that remain.
+
+        Without this, a count of 0xFFFFFFFF would spin through billions of
+        iterations before the first out-of-bounds read stopped it.
+        """
+        if count * item_size > self.remaining:
+            raise ValueError(
+                f"{self._what} declares {count} {field} at offset {self._offset}, "
+                f"needing at least {count * item_size} byte(s) of the "
+                f"{self.remaining} that remain"
+            )
+        return count
+
+    def tail(self) -> bytes:
+        return self._data[self._offset :]
+
+
+def _padding_start(data: bytes) -> int:
+    """Offset where the table's trailing fill begins, or len(data) if none."""
+    for pad in _PADDING_BYTES:
+        stripped = data.rstrip(bytes([pad]))
+        if len(stripped) != len(data):
+            return len(stripped)
+    return len(data)
+
+
+def _require_only_padding(cursor: _Cursor) -> None:
+    """Refuse a log with unexplained bytes after its last event."""
+    tail = cursor.tail()
+    if not tail or any(tail.count(pad) == len(tail) for pad in _PADDING_BYTES):
+        return
+    raise ValueError(
+        f"Event log has {len(tail)} unparsed byte(s) after the last event at "
+        f"offset {cursor.offset}, which are neither a terminator nor table padding"
+    )
+
+
+def _validated_imr_index(mr_index: int, cursor: _Cursor) -> int:
+    """Convert MrIndex to an RTMR index, rejecting registers TDX does not have."""
+    if mr_index > MAX_MR_INDEX:
+        raise ValueError(
+            f"Event before offset {cursor.offset} records MrIndex {mr_index}, "
+            f"but TDX only has {MAX_MR_INDEX} measurement register(s)"
+        )
+    return mr_index - 1
+
+
 # -- Parsing -------------------------------------------------------------------
 
 
 def parse_event_log(data: bytes) -> ParsedEventLog:
-    """Parse a raw CCEL event log binary into structured events."""
-    if len(data) < 32:
+    """Parse a raw CCEL event log binary into structured events.
+
+    Raises ValueError on any log that is truncated, declares a length or count
+    the buffer cannot hold, or carries bytes after its final event that are
+    neither the TCG terminator nor ACPI table padding.
+    """
+    if len(data) < _SPEC_ID_HEADER_SIZE:
         raise ValueError(f"Event log too short ({len(data)} bytes)")
 
-    offset = 0
-    event_index = 0
-
-    entry, digest_sizes, offset = _parse_spec_id_event(data, offset, event_index)
+    cursor = _Cursor(data, "Event log")
+    entry, digest_sizes = _parse_spec_id_event(cursor, 0)
     result = ParsedEventLog(digest_sizes=digest_sizes, events=[entry])
-    event_index += 1
-
     algo_sizes = dict(digest_sizes)
 
-    while offset < len(data):
-        if offset + 4 > len(data):
+    # Events stop at the TCG terminator, or where the table's fill begins for
+    # firmware that writes no terminator at all.
+    body_end = _padding_start(data)
+    index = 1
+    while cursor.offset < body_end and cursor.remaining >= _EVENT2_HEADER_SIZE:
+        if cursor.peek_u32("MrIndex") == LOG_TERMINATOR:
             break
-        if struct.unpack_from("<I", data, offset)[0] == 0xFFFFFFFF:
-            break
+        result.events.append(_parse_event2(cursor, index, algo_sizes))
+        index += 1
 
-        entry, offset = _parse_event2(data, offset, event_index, algo_sizes)
-        result.events.append(entry)
-        event_index += 1
-
+    _require_only_padding(cursor)
     return result
 
 
 def _parse_spec_id_event(
-    data: bytes, offset: int, index: int
-) -> tuple[EventLogEntry, list[tuple[int, int]], int]:
+    cursor: _Cursor, index: int
+) -> tuple[EventLogEntry, list[tuple[int, int]]]:
     """Parse the first event (TCG_PCClientPCREvent with 20-byte legacy digest)."""
-    imr_index = struct.unpack_from("<I", data, offset)[0] - 1
-    offset += 4
-
-    event_type = struct.unpack_from("<I", data, offset)[0]
-    offset += 4
-
-    legacy_digest = data[offset : offset + 20]
-    offset += 20
-
-    event_size = struct.unpack_from("<I", data, offset)[0]
-    offset += 4
-
-    event_data = data[offset : offset + event_size]
-    offset += event_size
-
-    # Parse the SpecIdEvent payload to extract algorithm digest sizes.
-    so = 24  # skip: 16 (signature) + 4 (platform_class) + 4 × 1 (minor/major/errata/uintn)
-    num_algos = struct.unpack_from("<I", event_data, so)[0]
-    so += 4
-
-    digest_sizes: list[tuple[int, int]] = []
-    for _ in range(num_algos):
-        algo_id = struct.unpack_from("<H", event_data, so)[0]
-        so += 2
-        digest_size = struct.unpack_from("<H", event_data, so)[0]
-        so += 2
-        digest_sizes.append((algo_id, digest_size))
+    mr_index = cursor.u32("MrIndex")
+    event_type = cursor.u32("EventType")
+    legacy_digest = cursor.take(20, "legacy digest")
+    event_size = cursor.u32("EventSize")
+    event_data = cursor.take(event_size, "SpecIdEvent payload")
 
     entry = EventLogEntry(
         index=index,
-        imr_index=imr_index,
+        imr_index=_validated_imr_index(mr_index, cursor),
         event_type=event_type,
         digests={0x0000: legacy_digest},
         event_data=event_data,
     )
+    return entry, _parse_digest_sizes(event_data)
 
-    return entry, digest_sizes, offset
+
+def _parse_digest_sizes(event_data: bytes) -> list[tuple[int, int]]:
+    """Read the algorithm digest sizes the log's events use.
+
+    Every later event is parsed against these sizes, so a lie here shifts the
+    whole log. The signature is checked because the fields below are read at
+    fixed offsets, and the sizes declared for algorithms with a known digest
+    length have to agree with it.
+    """
+    if event_data[: len(SPEC_ID_SIGNATURE)] != SPEC_ID_SIGNATURE:
+        raise ValueError(
+            f"First event is not a SpecIdEvent: expected signature "
+            f"{SPEC_ID_SIGNATURE!r}, got {event_data[: len(SPEC_ID_SIGNATURE)]!r}"
+        )
+
+    payload = _Cursor(event_data, "SpecIdEvent")
+    payload.take(_SPEC_ID_ALGO_COUNT_OFFSET, "SpecIdEvent header")
+    num_algos = payload.u32("NumberOfAlgorithms")
+    payload.bounded_count(num_algos, 4, "algorithm(s)")
+    if num_algos == 0:
+        raise ValueError("SpecIdEvent declares no digest algorithms")
+
+    digest_sizes: list[tuple[int, int]] = []
+    seen: set[int] = set()
+    for _ in range(num_algos):
+        algo_id = payload.u16("AlgorithmId")
+        digest_size = payload.u16("DigestSize")
+        if algo_id in seen:
+            raise ValueError(f"SpecIdEvent lists algorithm 0x{algo_id:04X} twice")
+        seen.add(algo_id)
+
+        known = ALGO_DIGEST_SIZES.get(algo_id)
+        if known is not None and digest_size != known:
+            raise ValueError(
+                f"SpecIdEvent declares {digest_size} bytes for algorithm "
+                f"0x{algo_id:04X}, which has a {known}-byte digest"
+            )
+        if not 0 < digest_size <= MAX_DIGEST_SIZE:
+            raise ValueError(
+                f"SpecIdEvent declares an unusable digest size {digest_size} "
+                f"for algorithm 0x{algo_id:04X}"
+            )
+        digest_sizes.append((algo_id, digest_size))
+
+    payload.take(payload.u8("VendorInfoSize"), "VendorInfo")
+    if payload.remaining:
+        raise ValueError(
+            f"SpecIdEvent has {payload.remaining} byte(s) beyond its declared fields"
+        )
+    return digest_sizes
 
 
 def _parse_event2(
-    data: bytes, offset: int, index: int, algo_sizes: dict[int, int]
-) -> tuple[EventLogEntry, int]:
+    cursor: _Cursor, index: int, algo_sizes: dict[int, int]
+) -> EventLogEntry:
     """Parse a TCG_PCR_EVENT2 (multi-algorithm digest, variable-length)."""
-    imr_index = struct.unpack_from("<I", data, offset)[0] - 1
-    offset += 4
+    mr_index = cursor.u32("MrIndex")
+    event_type = cursor.u32("EventType")
+    digest_count = cursor.u32("DigestCount")
 
-    event_type = struct.unpack_from("<I", data, offset)[0]
-    offset += 4
-
-    digest_count = struct.unpack_from("<I", data, offset)[0]
-    offset += 4
+    # Each entry is at least an algorithm id plus a one-byte digest.
+    cursor.bounded_count(digest_count, 3, "digest(s)")
 
     digests: dict[int, bytes] = {}
     for _ in range(digest_count):
-        algo_id = struct.unpack_from("<H", data, offset)[0]
-        offset += 2
+        algo_offset = cursor.offset
+        algo_id = cursor.u16("AlgorithmId")
 
         dsz = algo_sizes.get(algo_id) or ALGO_DIGEST_SIZES.get(algo_id)
         if dsz is None:
+            raise ValueError(f"Unknown algorithm 0x{algo_id:04X} at offset {algo_offset}")
+        if algo_id in digests:
             raise ValueError(
-                f"Unknown algorithm 0x{algo_id:04X} at offset {offset - 2}"
+                f"Event at offset {algo_offset} repeats algorithm 0x{algo_id:04X}"
             )
 
-        digests[algo_id] = data[offset : offset + dsz]
-        offset += dsz
+        digests[algo_id] = cursor.take(dsz, f"0x{algo_id:04X} digest")
 
-    event_size = struct.unpack_from("<I", data, offset)[0]
-    offset += 4
+    event_size = cursor.u32("EventSize")
+    event_data = cursor.take(event_size, "event data")
 
-    event_data = data[offset : offset + event_size]
-    offset += event_size
+    imr_index = _validated_imr_index(mr_index, cursor)
+    if event_type != EV_NO_ACTION and imr_index < 0:
+        raise ValueError(
+            f"Measured event at offset {cursor.offset} records MrIndex {mr_index}, "
+            "which is not an RTMR"
+        )
 
-    return (
-        EventLogEntry(
-            index=index,
-            imr_index=imr_index,
-            event_type=event_type,
-            digests=digests,
-            event_data=event_data,
-        ),
-        offset,
+    return EventLogEntry(
+        index=index,
+        imr_index=imr_index,
+        event_type=event_type,
+        digests=digests,
+        event_data=event_data,
     )

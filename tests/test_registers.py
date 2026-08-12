@@ -25,7 +25,9 @@ from cvm_measure.tdx.registers import (
     EFI_ACTION_DIGESTS,
     SEPARATOR_DIGEST,
     UKI_MEASURED_SECTIONS,
+    UKI_UNMEASURED_SECTION,
     ComputedRegisters,
+    _compute_rtmr1,
     _compute_rtmr2,
     compute_all,
 )
@@ -105,26 +107,74 @@ class TestDigestValidation:
             compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
 
 
-class TestUnsupportedUkiSections:
-    """RTMR[2] must fail loudly rather than omit sections systemd measures."""
+class TestUkiSectionCoverage:
+    """Every section systemd measures has to reach RTMR[2]."""
 
     @pytest.mark.parametrize(
-        "section", [".splash", ".dtb", ".dtbauto", ".profile", ".hwids", ".efifw"]
+        "section", [".splash", ".dtb", ".dtbauto", ".hwids", ".efifw", ".ucode"]
     )
-    def test_rejects_unmodelled_measured_section(self, section) -> None:
-        uki = build_pe([
+    def test_optional_section_changes_the_register(self, section) -> None:
+        """A section systemd measures cannot be silently left out."""
+        without = _compute_rtmr2(build_pe([(".linux", 16, 512, b"kernel")]))
+        with_section = _compute_rtmr2(build_pe([
             (".linux", 16, 512, b"kernel"),
             (section, 16, 512, b"extra"),
-        ])
-        with pytest.raises(ValueError, match="does not model yet"):
-            _compute_rtmr2(uki)
+        ]))
+        assert with_section != without
 
-    def test_accepts_uki_with_only_modelled_sections(self) -> None:
+    def test_measures_in_canonical_order_not_section_table_order(self) -> None:
+        """systemd walks its own enum, so the PE table order must not matter."""
+        sections = [
+            (".sbat", 16, 512, b"sbat"),
+            (".linux", 16, 512, b"kernel"),
+            (".uname", 16, 512, b"6.8.0"),
+            (".osrel", 16, 512, b"ID=cos"),
+        ]
+        shuffled = [sections[1], sections[3], sections[2], sections[0]]
+        assert _compute_rtmr2(build_pe(sections)) == _compute_rtmr2(build_pe(shuffled))
+
+    def test_expected_digest_sequence(self) -> None:
+        """.splash sits between .ucode and .uname, per systemd's enum."""
+        uki = build_pe([
+            (".uname", 16, 512, b"6.8.0"),
+            (".splash", 16, 512, b"png"),
+            (".ucode", 16, 512, b"microcode"),
+        ])
+        expected = []
+        for name, content in [
+            (".ucode", b"microcode"),
+            (".splash", b"png"),
+            (".uname", b"6.8.0"),
+        ]:
+            expected.append(hashlib.sha384((name + "\0").encode("ascii")).digest())
+            expected.append(hashlib.sha384(content.ljust(16, b"\x00")).digest())
+        assert _compute_rtmr2(uki) == replay_digests(expected).hex()
+
+    def test_pcrsig_is_not_measured(self) -> None:
+        """.pcrsig signs the expected result, so systemd keeps it out."""
+        without = _compute_rtmr2(build_pe([(".linux", 16, 512, b"kernel")]))
+        with_pcrsig = _compute_rtmr2(build_pe([
+            (".linux", 16, 512, b"kernel"),
+            (UKI_UNMEASURED_SECTION, 16, 512, b"sig"),
+        ]))
+        assert with_pcrsig == without
+
+    def test_rejects_multi_profile_uki(self) -> None:
         uki = build_pe([
             (".linux", 16, 512, b"kernel"),
-            (".osrel", 16, 512, b"ID=cos"),
+            (".profile", 16, 512, b"ID=default"),
         ])
-        assert len(_compute_rtmr2(uki)) == SHA384_SIZE * 2
+        with pytest.raises(ValueError, match="which profile is selected"):
+            _compute_rtmr2(uki)
+
+    def test_rejects_repeated_measured_section(self) -> None:
+        uki = build_pe([
+            (".linux", 16, 512, b"kernel"),
+            (".cmdline", 16, 512, b"quiet"),
+            (".cmdline", 16, 512, b"debug"),
+        ])
+        with pytest.raises(ValueError, match="repeats measured section"):
+            _compute_rtmr2(uki)
 
 
 class TestRTMR3:
@@ -287,6 +337,50 @@ class TestRTMR1FromCCEL:
         with pytest.raises(ValueError, match="--disk"):
             compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
 
+    def test_hardware_log_records_the_golden_boot_application_digests(
+        self, ccel_data_a3: bytes, golden_a3
+    ) -> None:
+        from cvm_measure.tdx.ccel import (
+            EV_EFI_BOOT_SERVICES_APPLICATION,
+            TPM_ALG_SHA384,
+            parse_event_log,
+        )
+
+        log = parse_event_log(ccel_data_a3)
+        recorded = [
+            e.digests[TPM_ALG_SHA384].hex()
+            for e in log.events_for_rtmr(1)
+            if e.event_type == EV_EFI_BOOT_SERVICES_APPLICATION
+        ]
+        assert recorded == [golden_a3.uki_image_digest, golden_a3.kernel_image_digest]
+
+    def test_boot_application_digests_match_the_hardware_log(
+        self, uki_a3: bytes, golden_a3
+    ) -> None:
+        """Pin the two RTMR[1] image measurements to what a real VM recorded.
+
+        EDK2 measures the PE image it loaded, and this hashes bytes taken out
+        of the file. The fixtures are a matched pair, one boot of one image, so
+        equality here is what says the two agree for a UKI and for the kernel
+        systemd-stub loads out of its .linux section.
+        """
+        from cvm_measure.tdx.pe import pe_authenticode_digest, pe_extract_section
+
+        kernel = pe_extract_section(uki_a3, ".linux", use_virtual_size=True)
+        assert kernel is not None
+        assert pe_authenticode_digest(uki_a3, "sha384").hex() == (
+            golden_a3.uki_image_digest
+        )
+        assert pe_authenticode_digest(kernel, "sha384").hex() == (
+            golden_a3.kernel_image_digest
+        )
+
+    def test_rtmr1_requires_an_embedded_kernel(self, baseline_a3) -> None:
+        """A UKI with no .linux section boots differently; do not guess."""
+        uki = build_pe([(".osrel", 16, 512, b"ID=cos")])
+        with pytest.raises(ValueError, match="no .linux section"):
+            _compute_rtmr1(uki, baseline_a3)
+
     def test_rtmr1_does_not_mistake_another_event_for_gpt(
         self, firmware_a3, uki_a3, baseline_a3
     ) -> None:
@@ -349,17 +443,27 @@ class TestComputedRegisters:
 
 class TestUKIMeasuredSections:
 
-    def test_section_list_is_ordered(self) -> None:
+    def test_matches_systemd_canonical_order(self) -> None:
+        """From the UnifiedSection enum in systemd's src/fundamental/uki.h."""
         assert UKI_MEASURED_SECTIONS == [
             ".linux",
             ".osrel",
             ".cmdline",
             ".initrd",
             ".ucode",
+            ".splash",
+            ".dtb",
             ".uname",
             ".sbat",
             ".pcrpkey",
+            ".profile",
+            ".dtbauto",
+            ".hwids",
+            ".efifw",
         ]
+
+    def test_pcrsig_is_the_only_section_systemd_skips(self) -> None:
+        assert UKI_UNMEASURED_SECTION not in UKI_MEASURED_SECTIONS
 
 
 class TestComputeAll:

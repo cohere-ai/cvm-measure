@@ -196,6 +196,25 @@ See `examples/baseline-example.json` for an annotated example.
 - RTMR[2]: OS identity (UKI PE sections measured by systemd-stub)
 - RTMR[3]: runtime policy (CoCo initdata digest)
 
+### Inputs this tool refuses
+
+A wrong register value is worse than no register value, so anything outside
+what is modelled raises instead of producing a plausible answer:
+
+- A baseline whose recorded firmware hash is not the firmware you passed.
+- An RTMR[0] baseline whose event set or order is not the sequence the
+  supported firmware measures. The ACPI and boot-variable events are replayed
+  positionally because three consecutive ACPI events are indistinguishable by
+  label.
+- Firmware whose TDX metadata does not describe exactly one CFV section, or
+  places it outside the image.
+- A UKI with no `.linux` section, with a `.profile` section (what gets measured
+  then depends on the profile selected at boot), or repeating a section
+  systemd measures.
+- A CCEL that is truncated, declares a length or count its buffer cannot hold,
+  or carries unexplained bytes after its last event.
+- A NUMA topology whose per-node cap cannot hold the requested RAM.
+
 ### What this tool does NOT cover
 
 These are real attack surfaces that require separate tools and controls:

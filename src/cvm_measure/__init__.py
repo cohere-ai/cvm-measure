@@ -14,4 +14,12 @@
 
 """cvm-measure: compute expected confidential VM register values from published inputs."""
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    # pyproject.toml holds the version; reading it back from the installed
+    # metadata keeps `cvm-measure --version` from drifting away from the
+    # release the tag published.
+    __version__ = version("cvm-measure")
+except PackageNotFoundError:  # pragma: no cover - running from an unbuilt tree
+    __version__ = "0.0.0+unknown"

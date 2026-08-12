@@ -16,17 +16,30 @@
 
 from __future__ import annotations
 
+import hashlib
+import struct
 import uuid
 
 import pytest
 
+from cvm_measure.tdx.guid import uuid_to_efi_bytes
 from cvm_measure.tdx.mrtd import (
+    FW_GUID_ENTRY_SIZE,
+    FW_GUID_TABLE_END_OFFSET,
+    FW_GUID_TABLE_FOOTER,
     GIB,
     MIB,
     MMIO_HOLE_END,
     MMIO_HOLE_START,
     PAGE_SIZE,
     TDX_METADATA_ATTR_EXTEND_MR,
+    TDX_METADATA_GUID,
+    TDX_METADATA_MAGIC,
+    TDX_METADATA_OFFSET_GUID,
+    TDX_METADATA_VERSION,
+    TDX_SECTION_BFV,
+    TDX_SECTION_CFV,
+    TDX_SECTION_TDHOB,
     GuestPhysicalRegion,
     LaunchOptions,
     MaterialRegion,
@@ -34,9 +47,53 @@ from cvm_measure.tdx.mrtd import (
     _extract_material_regions,
     _parse_fw_guid_table,
     _parse_tdx_metadata,
+    cfv_image,
     compute_mrtd,
     ram_regions,
 )
+
+# (section_type, data_offset, data_size, memory_base, memory_size, attributes)
+SyntheticSection = tuple[int, int, int, int, int, int]
+
+
+def build_firmware(sections: list[SyntheticSection], size: int = 0x40000) -> bytes:
+    """Build a minimal firmware image carrying a TDX metadata descriptor.
+
+    Only the structures the parser walks are real: the trailing GUID table, the
+    metadata offset entry, and the section descriptor array.
+    """
+    descriptor = struct.pack(
+        "<IIII", TDX_METADATA_MAGIC, 16 + 32 * len(sections), TDX_METADATA_VERSION,
+        len(sections),
+    )
+    for section_type, data_offset, data_size, mem_base, mem_size, attrs in sections:
+        descriptor += struct.pack(
+            "<IIQQII", data_offset, data_size, mem_base, mem_size, section_type, attrs
+        )
+
+    offset_block = (
+        struct.pack("<I", 0)  # patched below, once the layout is known
+        + struct.pack("<H", 4 + FW_GUID_ENTRY_SIZE)
+        + uuid_to_efi_bytes(TDX_METADATA_OFFSET_GUID)
+    )
+    footer = struct.pack(
+        "<H", len(offset_block) + FW_GUID_ENTRY_SIZE
+    ) + uuid_to_efi_bytes(FW_GUID_TABLE_FOOTER)
+
+    table = offset_block + footer
+    tail = bytes(FW_GUID_TABLE_END_OFFSET)
+    metadata_blob = uuid_to_efi_bytes(TDX_METADATA_GUID) + descriptor
+
+    body_len = size - len(table) - len(tail) - len(metadata_blob)
+    if body_len < 0:
+        raise ValueError("synthetic firmware too small for its metadata")
+    image = bytearray(bytes(body_len) + metadata_blob + table + tail)
+
+    # The offset entry counts backwards from the end of the image to the GUID
+    # that precedes the descriptor.
+    guid_pos = body_len
+    struct.pack_into("<I", image, guid_pos + len(metadata_blob), len(image) - guid_pos - 16)
+    return bytes(image)
 
 
 class TestRamRegions:
@@ -222,3 +279,106 @@ class TestFirmwareValidation:
     def test_missing_footer_raises(self) -> None:
         with pytest.raises(ValueError, match="footer"):
             _parse_fw_guid_table(b"\x00" * 100)
+
+
+class TestSyntheticFirmware:
+    """The builder has to produce something the real parser accepts."""
+
+    def test_round_trips_through_the_metadata_parser(self) -> None:
+        firmware = build_firmware([
+            (TDX_SECTION_CFV, 0, 0x1000, 0xFFE00000, 0x1000, 0),
+        ])
+        metadata = _parse_tdx_metadata(firmware)
+        assert metadata.version == TDX_METADATA_VERSION
+        assert [s.section_type for s in metadata.sections] == [TDX_SECTION_CFV]
+
+
+class TestCfvImage:
+    """The CFV is located from firmware metadata, not assumed to be at 0."""
+
+    def test_a3_cfv_is_the_first_128_kib(self, firmware_a3: bytes) -> None:
+        """The build this was developed against puts the CFV at offset 0."""
+        assert cfv_image(firmware_a3) == firmware_a3[0:0x20000]
+
+    def test_follows_a_relocated_cfv(self) -> None:
+        firmware = bytearray(build_firmware([
+            (TDX_SECTION_BFV, 0, 0x1000, 0xFFE01000, 0x1000, 1),
+            (TDX_SECTION_CFV, 0x2000, 0x1000, 0xFFE00000, 0x1000, 0),
+        ]))
+        firmware[0x2000:0x3000] = b"\xa5" * 0x1000
+        image = cfv_image(bytes(firmware))
+        assert image == b"\xa5" * 0x1000
+        assert hashlib.sha384(image).digest() != hashlib.sha384(bytes(0x1000)).digest()
+
+    def test_zero_fills_to_the_mapped_size(self) -> None:
+        firmware = bytearray(build_firmware([
+            (TDX_SECTION_CFV, 0x2000, 0x400, 0xFFE00000, 0x1000, 0),
+        ]))
+        firmware[0x2000:0x2400] = b"\xa5" * 0x400
+        assert cfv_image(bytes(firmware)) == b"\xa5" * 0x400 + bytes(0xC00)
+
+    def test_rejects_firmware_without_a_cfv(self) -> None:
+        firmware = build_firmware([
+            (TDX_SECTION_BFV, 0, 0x1000, 0xFFE01000, 0x1000, 1),
+        ])
+        with pytest.raises(ValueError, match="0 CFV section"):
+            cfv_image(firmware)
+
+    def test_rejects_firmware_with_two_cfvs(self) -> None:
+        firmware = build_firmware([
+            (TDX_SECTION_CFV, 0, 0x1000, 0xFFE00000, 0x1000, 0),
+            (TDX_SECTION_CFV, 0x1000, 0x1000, 0xFFE01000, 0x1000, 0),
+        ])
+        with pytest.raises(ValueError, match="2 CFV section"):
+            cfv_image(firmware)
+
+    def test_rejects_cfv_past_the_end_of_the_image(self) -> None:
+        firmware = build_firmware([
+            (TDX_SECTION_CFV, 0x3F000, 0x20000, 0xFFE00000, 0x20000, 0),
+        ])
+        with pytest.raises(ValueError, match="past the end"):
+            cfv_image(firmware)
+
+    def test_rejects_cfv_larger_than_its_memory_region(self) -> None:
+        firmware = build_firmware([
+            (TDX_SECTION_CFV, 0, 0x2000, 0xFFE00000, 0x1000, 0),
+        ])
+        with pytest.raises(ValueError, match="unusable CFV"):
+            cfv_image(firmware)
+
+    def test_hardware_log_records_the_golden_cfv_digest(
+        self, ccel_data_a3: bytes, golden_a3
+    ) -> None:
+        from cvm_measure.tdx.ccel import TPM_ALG_SHA384, parse_event_log
+
+        log = parse_event_log(ccel_data_a3)
+        recorded = next(
+            e.digests[TPM_ALG_SHA384]
+            for e in log.events_for_rtmr(0)
+            if "PLATFORM_FIRMWARE" in e.event_type_name
+        )
+        assert recorded.hex() == golden_a3.cfv
+
+    def test_derived_region_matches_the_hardware_cfv_digest(
+        self, firmware_a3: bytes, golden_a3
+    ) -> None:
+        """The metadata-derived region reproduces what a real VM measured."""
+        assert hashlib.sha384(cfv_image(firmware_a3)).hexdigest() == golden_a3.cfv
+
+
+class TestTdhobSectionValidation:
+
+    def test_rejects_two_tdhob_sections(self) -> None:
+        firmware = build_firmware([
+            (TDX_SECTION_TDHOB, 0, 0, 0x809000, 0x2000, 0),
+            (TDX_SECTION_TDHOB, 0, 0, 0x80B000, 0x2000, 0),
+        ])
+        with pytest.raises(ValueError, match="Multiple TDHOB"):
+            _extract_material_regions(firmware, LaunchOptions())
+
+    def test_rejects_firmware_without_a_tdhob(self) -> None:
+        firmware = build_firmware([
+            (TDX_SECTION_CFV, 0, 0x1000, 0xFFE00000, 0x1000, 0),
+        ])
+        with pytest.raises(ValueError, match="No TDHOB"):
+            _extract_material_regions(firmware, LaunchOptions())

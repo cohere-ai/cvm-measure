@@ -27,7 +27,12 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 @dataclass
 class GoldenValues:
-    """Expected register values from a known-good VM, used as test oracle."""
+    """Expected values from a known-good VM, used as test oracle.
+
+    The registers come from that VM's attestation token. The single-event
+    digests come from the CCEL of the same boot, and pin the inputs a register
+    is built from rather than only the folded result.
+    """
 
     machine_type: str
     mrtd: str
@@ -35,6 +40,9 @@ class GoldenValues:
     rtmr1: str
     rtmr2: str
     rtmr3: str
+    cfv: str
+    uki_image_digest: str
+    kernel_image_digest: str
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -56,6 +64,9 @@ def load_golden(machine_type: str) -> GoldenValues:
         rtmr1=data["rtmr1"],
         rtmr2=data["rtmr2"],
         rtmr3=data["rtmr3"],
+        cfv=data["cfv"],
+        uki_image_digest=data["uki_image_digest"],
+        kernel_image_digest=data["kernel_image_digest"],
     )
 
 
