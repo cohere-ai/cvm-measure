@@ -40,6 +40,30 @@ class TestCLIHelp:
             main(["tdx", "--help"])
 
 
+class TestCLIExtractUki:
+    """extract-uki must expose the same extraction cap as the compute path."""
+
+    def _tar_gz(self, tmp_path, payload: bytes):
+        import tarfile
+
+        raw = tmp_path / "disk.raw"
+        raw.write_bytes(payload)
+        archive = tmp_path / "disk.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(raw, arcname="disk.raw")
+        return archive
+
+    def test_max_extract_bytes_is_honoured(self, tmp_path) -> None:
+        archive = self._tar_gz(tmp_path, b"\x00" * 4096)
+        with pytest.raises(ValueError, match="extraction limit"):
+            main([
+                "extract-uki",
+                "--disk", str(archive),
+                "--output", str(tmp_path / "out.efi"),
+                "--max-extract-bytes", "1024",
+            ])
+
+
 class TestCLIExtractBaseline:
 
     def test_extract_baseline_to_stdout(self, ccel_data_a3, tmp_path, capsys) -> None:

@@ -24,6 +24,14 @@ from __future__ import annotations
 import hashlib
 import struct
 
+# SizeOfImage sits at this optional-header offset for both PE32 and PE32+.
+_OPT_OFF_SIZE_OF_IMAGE = 56
+
+# A section's zero tail covers uninitialized data, which in a real UKI is
+# under one SectionAlignment. VirtualSize is a UINT32, so without a cap a
+# hostile image could make us allocate close to 4 GiB.
+MAX_VIRTUAL_PADDING_BYTES = 64 * 1024 * 1024
+
 
 def _parse_pe_header(pe_data: bytes) -> tuple[int, int, int] | None:
     """Validate PE and return (coff_offset, num_sections, sec_table_offset).
@@ -42,6 +50,21 @@ def _parse_pe_header(pe_data: bytes) -> tuple[int, int, int] | None:
     opt_hdr_size = struct.unpack_from("<H", pe_data, coff_offset + 16)[0]
     sec_table_off = coff_offset + 20 + opt_hdr_size
     return coff_offset, num_sections, sec_table_off
+
+
+def _size_of_image(pe_data: bytes, coff_offset: int) -> int | None:
+    """Read SizeOfImage: how many bytes the loader maps for this image.
+
+    Returns None when the optional header is too small or truncated to hold
+    the field, in which case the caller cannot bound sections against it.
+    """
+    opt_hdr_size = struct.unpack_from("<H", pe_data, coff_offset + 16)[0]
+    field_end = _OPT_OFF_SIZE_OF_IMAGE + 4
+    if opt_hdr_size < field_end or coff_offset + 20 + field_end > len(pe_data):
+        return None
+    return int(
+        struct.unpack_from("<I", pe_data, coff_offset + 20 + _OPT_OFF_SIZE_OF_IMAGE)[0]
+    )
 
 
 def pe_authenticode_digest(pe_data: bytes, algo: str = "sha384") -> bytes:
@@ -132,12 +155,15 @@ def pe_extract_section(
 
     A section with no content is reported as absent, so callers cannot
     disagree about whether an empty section is measured.
+
+    The virtual extent must stay inside SizeOfImage, matching the bound
+    systemd applies before it measures a section.
     """
     header = _parse_pe_header(pe_data)
     if header is None:
         return None
 
-    _, num_sections, sec_table_off = header
+    coff_offset, num_sections, sec_table_off = header
 
     for i in range(num_sections):
         so = sec_table_off + i * 40
@@ -160,8 +186,24 @@ def pe_extract_section(
             return raw
         if virt_size == 0:
             return None
+
+        virt_addr = struct.unpack_from("<I", pe_data, so + 12)[0]
+        image_size = _size_of_image(pe_data, coff_offset)
+        if image_size is not None and virt_addr + virt_size > image_size:
+            raise ValueError(
+                f"Section {section_name!r} does not fit in the loaded image: "
+                f"VirtualAddress {virt_addr} + VirtualSize {virt_size} exceeds "
+                f"SizeOfImage {image_size}"
+            )
         if virt_size <= raw_size:
             return raw[:virt_size]
-        return raw + bytes(virt_size - raw_size)
+
+        padding = virt_size - raw_size
+        if padding > MAX_VIRTUAL_PADDING_BYTES:
+            raise ValueError(
+                f"Section {section_name!r} declares a {padding} byte zero tail, "
+                f"over the {MAX_VIRTUAL_PADDING_BYTES} byte limit"
+            )
+        return raw + bytes(padding)
 
     return None

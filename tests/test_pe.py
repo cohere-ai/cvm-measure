@@ -21,6 +21,7 @@ import struct
 import pytest
 
 from cvm_measure.tdx.pe import (
+    MAX_VIRTUAL_PADDING_BYTES,
     pe_authenticode_digest,
     pe_extract_section,
 )
@@ -29,11 +30,15 @@ _PE_OFFSET = 0x80
 _OPT_HDR_SIZE = 240
 
 
-def build_pe(sections: list[tuple[str, int, int, bytes]]) -> bytes:
+def build_pe(
+    sections: list[tuple[str, int, int, bytes]],
+    size_of_image: int | None = None,
+) -> bytes:
     """Build a minimal PE32+ image.
 
     Each section is (name, VirtualSize, SizeOfRawData, data), where data is
-    zero-padded out to SizeOfRawData on disk.
+    zero-padded out to SizeOfRawData on disk. SizeOfImage defaults to a value
+    that covers every section's virtual extent.
     """
     sec_table_off = _PE_OFFSET + 4 + 20 + _OPT_HDR_SIZE
     headers_len = sec_table_off + 40 * len(sections)
@@ -49,8 +54,17 @@ def build_pe(sections: list[tuple[str, int, int, bytes]]) -> bytes:
     struct.pack_into("<H", image, coff + 2, len(sections))
     struct.pack_into("<H", image, coff + 16, _OPT_HDR_SIZE)
 
+    if size_of_image is None:
+        virtual_end = max(
+            (0x1000 * (i + 1) + virt_size for i, (_, virt_size, _, _) in enumerate(sections)),
+            default=0x1000,
+        )
+        size_of_image = -(-virtual_end // 0x1000) * 0x1000
+
     opt = coff + 20
     struct.pack_into("<H", image, opt, 0x20B)
+    struct.pack_into("<I", image, opt + 32, 0x1000)
+    struct.pack_into("<I", image, opt + 56, size_of_image)
     struct.pack_into("<I", image, opt + 60, body_off)
     struct.pack_into("<I", image, opt + 108, 16)
 
@@ -138,6 +152,34 @@ class TestPESectionVirtualSize:
         pe = build_pe([(".initrd", 512, 512, b"payload")])
         with pytest.raises(ValueError, match="runs past the end"):
             pe_extract_section(pe[:-64], ".initrd", use_virtual_size=True)
+
+
+class TestPEVirtualSizeBounds:
+    """VirtualSize is attacker-controlled, so the zero tail must stay bounded."""
+
+    def test_huge_zero_tail_is_rejected(self) -> None:
+        huge = MAX_VIRTUAL_PADDING_BYTES + 512 + 1
+        pe = build_pe([(".initrd", huge, 512, b"payload")], size_of_image=huge + 0x1000)
+        with pytest.raises(ValueError, match="zero tail"):
+            pe_extract_section(pe, ".initrd", use_virtual_size=True)
+
+    def test_tail_at_the_limit_is_allowed(self) -> None:
+        virt_size = MAX_VIRTUAL_PADDING_BYTES + 512
+        pe = build_pe([(".initrd", virt_size, 512, b"payload")])
+        content = pe_extract_section(pe, ".initrd", use_virtual_size=True)
+        assert content is not None
+        assert len(content) == virt_size
+
+    def test_section_outside_size_of_image_is_rejected(self) -> None:
+        pe = build_pe([(".cmdline", 4096, 512, b"console=ttyS0")], size_of_image=0x1000)
+        with pytest.raises(ValueError, match="does not fit in the loaded image"):
+            pe_extract_section(pe, ".cmdline", use_virtual_size=True)
+
+    def test_size_of_image_ignored_for_raw_extraction(self) -> None:
+        pe = build_pe([(".cmdline", 4096, 512, b"console=ttyS0")], size_of_image=0x1000)
+        content = pe_extract_section(pe, ".cmdline")
+        assert content is not None
+        assert len(content) == 512
 
 
 class TestPESections:

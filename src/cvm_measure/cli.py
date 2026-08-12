@@ -51,6 +51,15 @@ def main(argv: list[str] | None = None) -> None:
     )
     uki_parser.add_argument("--disk", required=True, type=Path, help="Path to disk image (.raw or .tar.gz)")
     uki_parser.add_argument("--output", "-o", required=True, type=Path, help="Output path for extracted UKI")
+    uki_parser.add_argument(
+        "--max-extract-bytes",
+        type=int,
+        default=DEFAULT_MAX_EXTRACT_BYTES,
+        help=(
+            "Cap on bytes unpacked from a .tar.gz disk image "
+            f"(default: {DEFAULT_MAX_EXTRACT_BYTES})"
+        ),
+    )
 
     # -- tdx -------------------------------------------------------------------
     tdx_parser = sub.add_parser("tdx", help="Intel TDX measurement")
@@ -260,7 +269,7 @@ def _cmd_extract_uki(args: argparse.Namespace) -> None:
     from .disk import extract_uki
 
     _require_file(args.disk, "--disk")
-    digest = extract_uki(args.disk, args.output)
+    digest = extract_uki(args.disk, args.output, args.max_extract_bytes)
     size = args.output.stat().st_size
     print(f"Size: {size} bytes", file=sys.stderr)
     print(f"SHA-384: {digest.hex()}", file=sys.stderr)
