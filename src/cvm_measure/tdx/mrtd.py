@@ -57,6 +57,11 @@ TDX_METADATA_ATTR_EXTEND_MR = 0x0000_0001
 TDX_METADATA_VERSION = 1
 TDX_METADATA_MAGIC = 0x46564454  # 'T','D','V','F' in LE
 
+# Descriptor header: signature, length, version, section count.
+TDX_METADATA_HEADER_SIZE = 16
+# One section descriptor: two UINT32, two UINT64, two UINT32.
+TDX_METADATA_SECTION_SIZE = 32
+
 FW_GUID_TABLE_END_OFFSET = 0x20
 FW_GUID_ENTRY_SIZE = 18
 FW_GUID_TABLE_FOOTER = uuid.UUID("96b582de-1fb2-45f7-baea-a366c55a082d")
@@ -174,6 +179,11 @@ def _parse_tdx_metadata(firmware: bytes) -> TDXMetadata:
         raise ValueError(f"TDX metadata GUID mismatch: got {found_guid}")
 
     desc_pos = guid_pos + 16
+    if desc_pos + TDX_METADATA_HEADER_SIZE > fw_len:
+        raise ValueError(
+            f"TDX metadata descriptor at offset {desc_pos} does not fit in a "
+            f"{fw_len}-byte firmware image"
+        )
     signature, _length, version, section_count = struct.unpack_from(
         "<IIII", firmware, desc_pos
     )
@@ -183,12 +193,23 @@ def _parse_tdx_metadata(firmware: bytes) -> TDXMetadata:
     if version != TDX_METADATA_VERSION:
         raise ValueError(f"Unsupported TDX metadata version: {version}")
 
+    # section_count is a UINT32 read out of the image being validated. Bound it
+    # by the bytes actually left, so an overstated count is refused here rather
+    # than part-way through the array, with some sections already parsed.
+    sec_pos = desc_pos + TDX_METADATA_HEADER_SIZE
+    available = fw_len - sec_pos
+    if section_count * TDX_METADATA_SECTION_SIZE > available:
+        raise ValueError(
+            f"TDX metadata declares {section_count} section(s), needing "
+            f"{section_count * TDX_METADATA_SECTION_SIZE} byte(s) of the "
+            f"{available} left in the image"
+        )
+
     sections = []
-    sec_pos = desc_pos + 16
     for _ in range(section_count):
         do, ds, mb, ms, st, attr = struct.unpack_from("<IIQQII", firmware, sec_pos)
         sections.append(TDXMetadataSection(do, ds, mb, ms, st, attr))
-        sec_pos += 32
+        sec_pos += TDX_METADATA_SECTION_SIZE
 
     return TDXMetadata(version=version, sections=sections)
 

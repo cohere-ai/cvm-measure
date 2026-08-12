@@ -147,6 +147,8 @@ def _secureboot_value(event_data: bytes) -> bool:
     as a truncated or absent value, is treated as disabled rather than
     enabled, so a malformed log cannot claim Secure Boot was on.
     """
+    if len(event_data) < 32:
+        return False
     name_len: int = struct.unpack_from("<Q", event_data, 16)[0]
     data_len: int = struct.unpack_from("<Q", event_data, 24)[0]
     offset = 32 + name_len * 2

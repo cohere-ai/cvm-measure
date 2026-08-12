@@ -339,6 +339,19 @@ class TestCfvImage:
         with pytest.raises(ValueError, match="past the end"):
             cfv_image(firmware)
 
+    def test_rejects_more_sections_than_the_image_can_hold(self) -> None:
+        """section_count is a UINT32 read out of the image being parsed."""
+        firmware = bytearray(
+            build_firmware([(TDX_SECTION_CFV, 0, 0x1000, 0xFFE00000, 0x1000, 0)])
+        )
+        blocks = _parse_fw_guid_table(bytes(firmware))
+        offset = struct.unpack_from("<I", blocks[TDX_METADATA_OFFSET_GUID], 0)[0]
+        count_field = len(firmware) - offset + 12
+        struct.pack_into("<I", firmware, count_field, 0xFFFFFFFF)
+
+        with pytest.raises(ValueError, match="declares 4294967295 section"):
+            cfv_image(bytes(firmware))
+
     def test_rejects_cfv_mapped_larger_than_the_image(self) -> None:
         """memory_size is a UINT64 and the zero fill allocates it."""
         firmware = build_firmware([

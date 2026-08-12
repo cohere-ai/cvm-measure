@@ -33,10 +33,43 @@ _OPT_OFF_SIZE_OF_IMAGE = 56
 MAX_VIRTUAL_PADDING_BYTES = 64 * 1024 * 1024
 
 
+def _read_u16(pe_data: bytes, offset: int, what: str) -> int:
+    """Read a UINT16 that has to be inside the file."""
+    if offset < 0 or offset + 2 > len(pe_data):
+        raise ValueError(
+            f"PE image truncated: {what} at offset {offset} is past the end of "
+            f"a {len(pe_data)}-byte image"
+        )
+    return int(struct.unpack_from("<H", pe_data, offset)[0])
+
+
+def _read_u32(pe_data: bytes, offset: int, what: str) -> int:
+    """Read a UINT32 that has to be inside the file."""
+    if offset < 0 or offset + 4 > len(pe_data):
+        raise ValueError(
+            f"PE image truncated: {what} at offset {offset} is past the end of "
+            f"a {len(pe_data)}-byte image"
+        )
+    return int(struct.unpack_from("<I", pe_data, offset)[0])
+
+
+def _section_entry(pe_data: bytes, sec_table_off: int, i: int) -> int:
+    """Offset of one 40-byte section-table entry, which has to be in the file."""
+    so = sec_table_off + i * 40
+    if so + 40 > len(pe_data):
+        raise ValueError(
+            f"PE section table entry {i} at offset {so} runs past the end of a "
+            f"{len(pe_data)}-byte image"
+        )
+    return so
+
+
 def _parse_pe_header(pe_data: bytes) -> tuple[int, int, int] | None:
     """Validate PE and return (coff_offset, num_sections, sec_table_offset).
 
-    Returns None for invalid PE files.
+    Returns None when the signatures say this is not a PE at all. A file that
+    claims to be one but cannot hold the headers it declares raises instead,
+    because every offset below is read out of those headers.
     """
     if len(pe_data) < 64 or pe_data[:2] != b"MZ":
         return None
@@ -46,9 +79,15 @@ def _parse_pe_header(pe_data: bytes) -> tuple[int, int, int] | None:
         return None
 
     coff_offset = pe_offset + 4
-    num_sections = struct.unpack_from("<H", pe_data, coff_offset + 2)[0]
-    opt_hdr_size = struct.unpack_from("<H", pe_data, coff_offset + 16)[0]
+    num_sections = _read_u16(pe_data, coff_offset + 2, "NumberOfSections")
+    opt_hdr_size = _read_u16(pe_data, coff_offset + 16, "SizeOfOptionalHeader")
     sec_table_off = coff_offset + 20 + opt_hdr_size
+    if sec_table_off > len(pe_data):
+        raise ValueError(
+            f"PE optional header declares {opt_hdr_size} bytes, putting the "
+            f"section table at offset {sec_table_off}, past the end of a "
+            f"{len(pe_data)}-byte image"
+        )
     return coff_offset, num_sections, sec_table_off
 
 
@@ -58,12 +97,12 @@ def _size_of_image(pe_data: bytes, coff_offset: int) -> int | None:
     Returns None when the optional header is too small or truncated to hold
     the field, in which case the caller cannot bound sections against it.
     """
-    opt_hdr_size = struct.unpack_from("<H", pe_data, coff_offset + 16)[0]
+    opt_hdr_size = _read_u16(pe_data, coff_offset + 16, "SizeOfOptionalHeader")
     field_end = _OPT_OFF_SIZE_OF_IMAGE + 4
     if opt_hdr_size < field_end or coff_offset + 20 + field_end > len(pe_data):
         return None
-    return int(
-        struct.unpack_from("<I", pe_data, coff_offset + 20 + _OPT_OFF_SIZE_OF_IMAGE)[0]
+    return _read_u32(
+        pe_data, coff_offset + 20 + _OPT_OFF_SIZE_OF_IMAGE, "SizeOfImage"
     )
 
 
@@ -80,8 +119,8 @@ def pe_authenticode_digest(pe_data: bytes, algo: str = "sha384") -> bytes:
 
     coff_offset, num_sections, sec_table_off = header
     opt_offset = coff_offset + 20
-    opt_hdr_size = struct.unpack_from("<H", pe_data, coff_offset + 16)[0]
-    magic = struct.unpack_from("<H", pe_data, opt_offset)[0]
+    opt_hdr_size = _read_u16(pe_data, coff_offset + 16, "SizeOfOptionalHeader")
+    magic = _read_u16(pe_data, opt_offset, "optional header magic")
 
     if magic == 0x20B:  # PE32+
         checksum_off = opt_offset + 64
@@ -94,21 +133,21 @@ def pe_authenticode_digest(pe_data: bytes, algo: str = "sha384") -> bytes:
     else:
         raise ValueError(f"Unknown PE optional header magic: 0x{magic:04X}")
 
-    size_of_headers = struct.unpack_from("<I", pe_data, opt_offset + 60)[0]
-    num_rva_and_sizes = struct.unpack_from("<I", pe_data, num_rva_off)[0]
+    size_of_headers = _read_u32(pe_data, opt_offset + 60, "SizeOfHeaders")
+    num_rva_and_sizes = _read_u32(pe_data, num_rva_off, "NumberOfRvaAndSizes")
 
     cert_entry_off = dd_offset + 4 * 8 if num_rva_and_sizes > 4 else None
     cert_table_size = 0
     if cert_entry_off is not None and cert_entry_off + 8 <= opt_offset + opt_hdr_size:
-        cert_table_size = struct.unpack_from("<I", pe_data, cert_entry_off + 4)[0]
+        cert_table_size = _read_u32(pe_data, cert_entry_off + 4, "certificate table size")
     else:
         cert_entry_off = None
 
     sections: list[tuple[int, int]] = []
     for i in range(num_sections):
-        so = sec_table_off + i * 40
-        raw_size = struct.unpack_from("<I", pe_data, so + 16)[0]
-        raw_ptr = struct.unpack_from("<I", pe_data, so + 20)[0]
+        so = _section_entry(pe_data, sec_table_off, i)
+        raw_size = _read_u32(pe_data, so + 16, "SizeOfRawData")
+        raw_ptr = _read_u32(pe_data, so + 20, "PointerToRawData")
         if raw_size > 0 and raw_ptr > 0:
             sections.append((raw_ptr, raw_size))
     sections.sort()
@@ -148,11 +187,7 @@ def pe_section_names(pe_data: bytes) -> list[str]:
     _, num_sections, sec_table_off = header
     names = []
     for i in range(num_sections):
-        so = sec_table_off + i * 40
-        if so + 40 > len(pe_data):
-            raise ValueError(
-                f"PE section table runs past the end of the image at offset {so}"
-            )
+        so = _section_entry(pe_data, sec_table_off, i)
         names.append(
             pe_data[so : so + 8].split(b"\x00", 1)[0].decode("ascii", errors="replace")
         )
@@ -186,11 +221,11 @@ def pe_extract_section(
     coff_offset, num_sections, sec_table_off = header
 
     for i in range(num_sections):
-        so = sec_table_off + i * 40
+        so = _section_entry(pe_data, sec_table_off, i)
         name = pe_data[so : so + 8].split(b"\x00", 1)[0].decode("ascii", errors="replace")
-        virt_size = struct.unpack_from("<I", pe_data, so + 8)[0]
-        raw_size = struct.unpack_from("<I", pe_data, so + 16)[0]
-        raw_ptr = struct.unpack_from("<I", pe_data, so + 20)[0]
+        virt_size = _read_u32(pe_data, so + 8, "VirtualSize")
+        raw_size = _read_u32(pe_data, so + 16, "SizeOfRawData")
+        raw_ptr = _read_u32(pe_data, so + 20, "PointerToRawData")
         if name != section_name:
             continue
         if raw_size == 0 or raw_ptr == 0:
@@ -207,7 +242,7 @@ def pe_extract_section(
         if virt_size == 0:
             return None
 
-        virt_addr = struct.unpack_from("<I", pe_data, so + 12)[0]
+        virt_addr = _read_u32(pe_data, so + 12, "VirtualAddress")
         image_size = _size_of_image(pe_data, coff_offset)
         if image_size is not None and virt_addr + virt_size > image_size:
             raise ValueError(

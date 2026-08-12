@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import struct
+from collections.abc import Callable
 
 import pytest
 
@@ -102,6 +103,44 @@ class TestPEValidation:
             pe_authenticode_digest(data)
 
 
+class TestPETruncatedHeaders:
+    """Every offset below the signatures is read out of the headers, so a file
+    that cannot hold the headers it declares has to be refused rather than
+    raising struct.error out of the middle of a parse."""
+
+    @staticmethod
+    def _readers(section: str = ".linux") -> list[Callable[[bytes], object]]:
+        return [
+            lambda data: pe_authenticode_digest(data),
+            lambda data: pe_section_names(data),
+            lambda data: pe_extract_section(data, section, use_virtual_size=True),
+        ]
+
+    def test_rejects_pe_signature_with_no_coff_header(self) -> None:
+        data = b"MZ" + bytes(0x3A) + struct.pack("<I", 0x40) + b"PE\x00\x00"
+        for read in self._readers():
+            with pytest.raises(ValueError, match="truncated"):
+                read(data)
+
+    def test_rejects_optional_header_past_end_of_file(self) -> None:
+        data = build_pe([(".linux", 16, 16, b"kernel")])
+        # Keep the signatures and COFF header, drop the optional header.
+        truncated = data[: _PE_OFFSET + 4 + 20]
+        for read in self._readers():
+            with pytest.raises(ValueError, match="truncated|section table"):
+                read(truncated)
+
+    def test_rejects_section_table_past_end_of_file(self) -> None:
+        data = build_pe([(".linux", 16, 16, b"kernel"), (".osrel", 8, 8, b"osrel")])
+        sec_table_off = _PE_OFFSET + 4 + 20 + _OPT_HDR_SIZE
+        truncated = data[: sec_table_off + 60]
+        # Ask for a section that is not entry 0, so every reader walks into the
+        # entry the file cannot hold.
+        for read in self._readers(".absent"):
+            with pytest.raises(ValueError, match="section table entry 1"):
+                read(truncated)
+
+
 class TestPESectionNames:
 
     def test_lists_names_in_table_order_with_duplicates(self) -> None:
@@ -119,7 +158,7 @@ class TestPESectionNames:
     def test_truncated_section_table_raises(self) -> None:
         pe = build_pe([(".linux", 16, 512, b"kernel")])
         sec_table_off = _PE_OFFSET + 4 + 20 + _OPT_HDR_SIZE
-        with pytest.raises(ValueError, match="section table runs past"):
+        with pytest.raises(ValueError, match="section table entry 0"):
             pe_section_names(pe[: sec_table_off + 8])
 
 
