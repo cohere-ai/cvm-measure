@@ -124,8 +124,11 @@ def pe_extract_section(
 ) -> bytes | None:
     """Extract a named section's data from a PE/COFF image.
 
-    With use_virtual_size=True, returns only VirtualSize bytes, matching
-    what systemd-stub measures for UKI section content.
+    With use_virtual_size=True, returns the loaded image of the section as
+    systemd-stub measures it: at most SizeOfRawData bytes from the file,
+    zero-filled out to VirtualSize. A section may declare more virtual space
+    than it stores on disk, and the loader zero-fills that tail rather than
+    reading whatever follows in the file.
 
     A section with no content is reported as absent, so callers cannot
     disagree about whether an empty section is measured.
@@ -142,10 +145,23 @@ def pe_extract_section(
         virt_size = struct.unpack_from("<I", pe_data, so + 8)[0]
         raw_size = struct.unpack_from("<I", pe_data, so + 16)[0]
         raw_ptr = struct.unpack_from("<I", pe_data, so + 20)[0]
-        if name == section_name and raw_size > 0 and raw_ptr > 0:
-            size = virt_size if use_virtual_size else raw_size
-            if size == 0:
-                return None
-            return pe_data[raw_ptr : raw_ptr + size]
+        if name != section_name:
+            continue
+        if raw_size == 0 or raw_ptr == 0:
+            return None
+        if raw_ptr + raw_size > len(pe_data):
+            raise ValueError(
+                f"Section {section_name!r} runs past the end of the PE image: "
+                f"{raw_ptr} + {raw_size} > {len(pe_data)}"
+            )
+
+        raw = pe_data[raw_ptr : raw_ptr + raw_size]
+        if not use_virtual_size:
+            return raw
+        if virt_size == 0:
+            return None
+        if virt_size <= raw_size:
+            return raw[:virt_size]
+        return raw + bytes(virt_size - raw_size)
 
     return None

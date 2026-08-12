@@ -32,6 +32,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .disk import DEFAULT_MAX_EXTRACT_BYTES
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -102,6 +103,15 @@ def _add_compute_args(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help="Path to pod VM disk image (.raw or .tar.gz); computes GPT digest for RTMR[1]",
+    )
+    parser.add_argument(
+        "--max-extract-bytes",
+        type=int,
+        default=DEFAULT_MAX_EXTRACT_BYTES,
+        help=(
+            "Cap on bytes unpacked from a .tar.gz disk image "
+            f"(default: {DEFAULT_MAX_EXTRACT_BYTES})"
+        ),
     )
     parser.add_argument("--baseline", type=Path, help="Path to baseline JSON")
     parser.add_argument("--ram", type=int, help="Total guest RAM in GiB")
@@ -185,7 +195,7 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
     if args.disk is not None:
         _require_file(args.disk, "--disk")
         from .disk import compute_gpt_digest
-        gpt_digest_hex = compute_gpt_digest(args.disk).hex()
+        gpt_digest_hex = compute_gpt_digest(args.disk, args.max_extract_bytes).hex()
 
     regs = compute_all_registers(
         firmware,

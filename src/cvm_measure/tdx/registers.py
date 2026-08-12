@@ -37,6 +37,9 @@ from .pe import pe_authenticode_digest, pe_extract_section
 from .rtmr import SHA384_SIZE, replay_digests
 from .uefi import compute_secureboot_digest
 
+# The sections the CAA pod VM UKI carries, in the order systemd-stub measures
+# them. This is a subset of systemd's canonical list, which is fine only
+# because the current image carries nothing else that gets measured.
 UKI_MEASURED_SECTIONS = [
     ".linux",
     ".osrel",
@@ -48,10 +51,42 @@ UKI_MEASURED_SECTIONS = [
     ".pcrpkey",
 ]
 
+# systemd-stub also measures these when present, interleaved with the list
+# above rather than appended to it. Emitting RTMR[2] without them would be
+# silently wrong, so refuse instead.
+# TODO(CC-167): model systemd's full canonical section list and ordering so
+# any UKI can be measured rather than just the current CAA image.
+UKI_UNSUPPORTED_SECTIONS = [
+    ".splash",
+    ".dtb",
+    ".dtbauto",
+    ".profile",
+    ".hwids",
+    ".efifw",
+]
+
 SEPARATOR_DIGEST = hashlib.sha384(struct.pack("<I", 0)).digest()
 
 # RTMR[0] events that occupy a fixed slot in the replay, addressed by label.
 _RTMR0_FIXED_LABELS = ("TdxTable", "PK", "KEK", "db", "dbx")
+
+# The remaining RTMR[0] events are replayed positionally, because three
+# consecutive ACPI_DATA events are indistinguishable by label. That only works
+# for firmware measuring this exact sequence, which is the GCP A3 OVMF build.
+# TODO(CC-167): keep an ordered CCEL template with placeholders for the
+# computable events, so other firmware can be reconstructed by substitution
+# instead of relying on a hard-coded sequence.
+_RTMR0_TRAILING_LABELS = (
+    "ACPI_DATA",
+    "ACPI_DATA",
+    "ACPI_DATA",
+    "BootOrder",
+    "Boot0001",
+    "Boot0002",
+    "Boot0003",
+    "Boot0000",
+)
+_RTMR0_EXPECTED_LABELS = _RTMR0_FIXED_LABELS + _RTMR0_TRAILING_LABELS
 
 # Labels a baseline may use for the EV_EFI_GPT_EVENT digest. Baselines
 # extracted by this tool omit it, since it is computed from --disk instead.
@@ -65,6 +100,38 @@ EFI_ACTION_DIGESTS = {
         "Exit Boot Services Returned with Success",
     ]
 }
+
+
+def _digest_from_hex(value: str, what: str) -> bytes:
+    """Decode a caller-supplied SHA-384 hex string, rejecting anything else."""
+    try:
+        raw = bytes.fromhex(value)
+    except ValueError as exc:
+        raise ValueError(f"{what} is not valid hex: {value!r}") from exc
+    if len(raw) != SHA384_SIZE:
+        raise ValueError(
+            f"{what} must be a {SHA384_SIZE}-byte SHA-384 digest "
+            f"({SHA384_SIZE * 2} hex chars), got {len(raw)} bytes"
+        )
+    return raw
+
+
+def _verify_firmware(firmware: bytes, baseline: Baseline) -> None:
+    """Refuse to mix a baseline with firmware it was not captured from.
+
+    Baseline events and the digests computed here describe one boot of one
+    firmware image. Combining halves from different images yields a register
+    tuple that looks plausible but no machine will ever report.
+    """
+    if not baseline.firmware_sha384:
+        return
+    actual = hashlib.sha384(firmware).hexdigest()
+    if actual != baseline.firmware_sha384.lower():
+        raise ValueError(
+            f"Baseline {baseline.machine_type!r} was captured from different "
+            f"firmware: baseline records {baseline.firmware_sha384}, the given "
+            f"firmware hashes to {actual}"
+        )
 
 
 @dataclass
@@ -111,8 +178,12 @@ def compute_all(
         gpt_digest_hex: Pre-computed EV_EFI_GPT_EVENT SHA-384 hex string. If
             None, falls back to the GPT event captured in the baseline.
     """
+    _verify_firmware(firmware, baseline)
+
     if rtmr3_hex is None:
         rtmr3_hex = bytes(SHA384_SIZE).hex()
+    else:
+        rtmr3_hex = _digest_from_hex(rtmr3_hex, "rtmr3").hex()
 
     return ComputedRegisters(
         mrtd=_compute_mrtd(firmware, ram_gib, numa_nodes, max_per_node_gib),
@@ -169,24 +240,40 @@ def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:
             f"RTMR[0] baseline is missing required event(s): {', '.join(missing)}"
         )
 
+    labels = [event.label for event in baseline_events]
+    if sorted(labels) != sorted(_RTMR0_EXPECTED_LABELS):
+        raise ValueError(
+            f"RTMR[0] baseline for {baseline.machine_type!r} does not match the only "
+            f"supported event set. Expected {list(_RTMR0_EXPECTED_LABELS)}, got {labels}. "
+            "Reconstructing other firmware needs an ordered CCEL template."
+        )
+
+    fixed = set(_RTMR0_FIXED_LABELS)
+    trailing = [event for event in baseline_events if event.label not in fixed]
+    if tuple(e.label for e in trailing) != _RTMR0_TRAILING_LABELS:
+        raise ValueError(
+            "RTMR[0] baseline events are in an unsupported order: expected "
+            f"{list(_RTMR0_TRAILING_LABELS)} after the Secure Boot variables, got "
+            f"{[e.label for e in trailing]}. These are replayed positionally, so the "
+            "order has to match the firmware that produced them."
+        )
+
     cfv_digest = hashlib.sha384(firmware[0:0x20000]).digest()
     sb_flag_data = b"\x01" if baseline.secureboot_enabled else b"\x00"
     sb_flag_digest = compute_secureboot_digest("SecureBoot", sb_flag_data)
 
-    fixed = set(_RTMR0_FIXED_LABELS)
     digests = [
-        bytes.fromhex(by_label["TdxTable"]),
+        _digest_from_hex(by_label["TdxTable"], "baseline TdxTable digest"),
         cfv_digest,
         sb_flag_digest,
-        bytes.fromhex(by_label["PK"]),
-        bytes.fromhex(by_label["KEK"]),
-        bytes.fromhex(by_label["db"]),
-        bytes.fromhex(by_label["dbx"]),
+        _digest_from_hex(by_label["PK"], "baseline PK digest"),
+        _digest_from_hex(by_label["KEK"], "baseline KEK digest"),
+        _digest_from_hex(by_label["db"], "baseline db digest"),
+        _digest_from_hex(by_label["dbx"], "baseline dbx digest"),
         SEPARATOR_DIGEST,
         *(
-            bytes.fromhex(event.digest)
-            for event in baseline_events
-            if event.label not in fixed
+            _digest_from_hex(event.digest, f"baseline {event.label} digest")
+            for event in trailing
         ),
     ]
 
@@ -211,7 +298,7 @@ def _compute_rtmr1(
     whole image is then the kernel that firmware hands off to.
     """
     if gpt_digest_hex is not None:
-        gpt_digest = bytes.fromhex(gpt_digest_hex)
+        gpt_digest = _digest_from_hex(gpt_digest_hex, "GPT digest")
     else:
         gpt_event = next(
             (e for e in baseline.rtmr_events(1) if e.label in _GPT_LABELS), None
@@ -222,7 +309,7 @@ def _compute_rtmr1(
                 "disk layout. Pass --disk to compute it from the pod VM image, or "
                 "use a legacy baseline that still carries a GPT event."
             )
-        gpt_digest = bytes.fromhex(gpt_event.digest)
+        gpt_digest = _digest_from_hex(gpt_event.digest, "baseline GPT digest")
 
     uki_auth = pe_authenticode_digest(uki, "sha384")
     kernel_data = pe_extract_section(uki, ".linux", use_virtual_size=True)
@@ -252,6 +339,18 @@ def _compute_rtmr2(uki: bytes) -> str:
       1. SHA-384(section_name + '\\0')
       2. SHA-384(section_content)
     """
+    unsupported = [
+        name
+        for name in UKI_UNSUPPORTED_SECTIONS
+        if pe_extract_section(uki, name) is not None
+    ]
+    if unsupported:
+        raise ValueError(
+            f"UKI carries section(s) {', '.join(unsupported)}, which systemd-stub "
+            "measures into RTMR[2] but this tool does not model yet. The result "
+            "would be silently wrong, so refusing to compute it."
+        )
+
     digests = []
     for section_name in UKI_MEASURED_SECTIONS:
         content = pe_extract_section(uki, section_name, use_virtual_size=True)

@@ -19,14 +19,19 @@ from __future__ import annotations
 import hashlib
 import struct
 
+import pytest
+
 from cvm_measure.tdx.registers import (
     EFI_ACTION_DIGESTS,
     SEPARATOR_DIGEST,
     UKI_MEASURED_SECTIONS,
     ComputedRegisters,
+    _compute_rtmr2,
     compute_all,
 )
 from cvm_measure.tdx.rtmr import SHA384_SIZE, replay_digests
+
+from .test_pe import build_pe
 
 
 class TestConstants:
@@ -42,6 +47,84 @@ class TestConstants:
 
     def test_separator_digest_length(self) -> None:
         assert len(SEPARATOR_DIGEST) == SHA384_SIZE
+
+
+class TestFirmwareBaselinePairing:
+    """A baseline describes one firmware image; mixing halves is meaningless."""
+
+    def test_rejects_firmware_the_baseline_was_not_captured_from(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        other_firmware = firmware_a3 + b"\x00"
+        with pytest.raises(ValueError, match="different firmware"):
+            compute_all(other_firmware, uki_a3, baseline_a3, ram_gib=234)
+
+    def test_accepts_matching_firmware(self, firmware_a3, uki_a3, baseline_a3) -> None:
+        assert baseline_a3.firmware_sha384 == hashlib.sha384(firmware_a3).hexdigest()
+        compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+
+    def test_baseline_without_recorded_hash_is_allowed(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        baseline_a3.firmware_sha384 = ""
+        compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+
+
+class TestDigestValidation:
+
+    @pytest.mark.parametrize("bad", ["xyz", "ab", "ab" * 47, "ab" * 49, ""])
+    def test_rejects_malformed_rtmr3(
+        self, firmware_a3, uki_a3, baseline_a3, bad
+    ) -> None:
+        with pytest.raises(ValueError, match="rtmr3"):
+            compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234, rtmr3_hex=bad)
+
+    def test_normalizes_rtmr3_to_lowercase(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        regs = compute_all(
+            firmware_a3, uki_a3, baseline_a3, ram_gib=234, rtmr3_hex="AB" * 48
+        )
+        assert regs.rtmr3 == "ab" * 48
+
+    def test_rejects_malformed_gpt_digest(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        with pytest.raises(ValueError, match="GPT digest"):
+            compute_all(
+                firmware_a3, uki_a3, baseline_a3, ram_gib=234, gpt_digest_hex="beef"
+            )
+
+    def test_rejects_malformed_baseline_digest(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        for event in baseline_a3.events:
+            if event.label == "dbx":
+                event.digest = "not-hex"
+        with pytest.raises(ValueError, match="baseline dbx digest"):
+            compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+
+
+class TestUnsupportedUkiSections:
+    """RTMR[2] must fail loudly rather than omit sections systemd measures."""
+
+    @pytest.mark.parametrize(
+        "section", [".splash", ".dtb", ".dtbauto", ".profile", ".hwids", ".efifw"]
+    )
+    def test_rejects_unmodelled_measured_section(self, section) -> None:
+        uki = build_pe([
+            (".linux", 16, 512, b"kernel"),
+            (section, 16, 512, b"extra"),
+        ])
+        with pytest.raises(ValueError, match="does not model yet"):
+            _compute_rtmr2(uki)
+
+    def test_accepts_uki_with_only_modelled_sections(self) -> None:
+        uki = build_pe([
+            (".linux", 16, 512, b"kernel"),
+            (".osrel", 16, 512, b"ID=cos"),
+        ])
+        assert len(_compute_rtmr2(uki)) == SHA384_SIZE * 2
 
 
 class TestRTMR3:
@@ -113,11 +196,33 @@ class TestRTMR0FromCCEL:
     def test_rtmr0_rejects_baseline_missing_fixed_event(
         self, firmware_a3, uki_a3, baseline_a3
     ) -> None:
-        import pytest
-
         baseline_a3.events = [e for e in baseline_a3.events if e.label != "dbx"]
 
         with pytest.raises(ValueError, match="missing required event"):
+            compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+
+    def test_rtmr0_rejects_reordered_positional_events(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        """ACPI and Boot events are replayed positionally, so order must match."""
+        rtmr0 = [e for e in baseline_a3.events if e.rtmr == 0]
+        boot_order = next(e for e in rtmr0 if e.label == "BootOrder")
+        boot0000 = next(e for e in rtmr0 if e.label == "Boot0000")
+        i, j = rtmr0.index(boot_order), rtmr0.index(boot0000)
+        rtmr0[i], rtmr0[j] = rtmr0[j], rtmr0[i]
+        baseline_a3.events = rtmr0 + [e for e in baseline_a3.events if e.rtmr != 0]
+
+        with pytest.raises(ValueError, match="unsupported order"):
+            compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
+
+    def test_rtmr0_rejects_unrecognized_event_set(
+        self, firmware_a3, uki_a3, baseline_a3
+    ) -> None:
+        """Other firmware measures a different sequence; fail instead of guessing."""
+        extra = next(e for e in baseline_a3.events if e.label == "Boot0000")
+        baseline_a3.events = [*baseline_a3.events, extra]
+
+        with pytest.raises(ValueError, match="supported event set"):
             compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
 
 

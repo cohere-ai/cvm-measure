@@ -16,12 +16,56 @@
 
 from __future__ import annotations
 
+import struct
+
 import pytest
 
 from cvm_measure.tdx.pe import (
     pe_authenticode_digest,
     pe_extract_section,
 )
+
+_PE_OFFSET = 0x80
+_OPT_HDR_SIZE = 240
+
+
+def build_pe(sections: list[tuple[str, int, int, bytes]]) -> bytes:
+    """Build a minimal PE32+ image.
+
+    Each section is (name, VirtualSize, SizeOfRawData, data), where data is
+    zero-padded out to SizeOfRawData on disk.
+    """
+    sec_table_off = _PE_OFFSET + 4 + 20 + _OPT_HDR_SIZE
+    headers_len = sec_table_off + 40 * len(sections)
+    body_off = -(-headers_len // 512) * 512
+
+    image = bytearray(body_off)
+    image[:2] = b"MZ"
+    struct.pack_into("<I", image, 0x3C, _PE_OFFSET)
+    image[_PE_OFFSET : _PE_OFFSET + 4] = b"PE\x00\x00"
+
+    coff = _PE_OFFSET + 4
+    struct.pack_into("<H", image, coff, 0x8664)
+    struct.pack_into("<H", image, coff + 2, len(sections))
+    struct.pack_into("<H", image, coff + 16, _OPT_HDR_SIZE)
+
+    opt = coff + 20
+    struct.pack_into("<H", image, opt, 0x20B)
+    struct.pack_into("<I", image, opt + 60, body_off)
+    struct.pack_into("<I", image, opt + 108, 16)
+
+    raw_ptr = body_off
+    for i, (name, virt_size, raw_size, data) in enumerate(sections):
+        so = sec_table_off + i * 40
+        image[so : so + len(name)] = name.encode("ascii")
+        struct.pack_into("<I", image, so + 8, virt_size)
+        struct.pack_into("<I", image, so + 12, 0x1000 * (i + 1))
+        struct.pack_into("<I", image, so + 16, raw_size)
+        struct.pack_into("<I", image, so + 20, raw_ptr)
+        image.extend(data + bytes(raw_size - len(data)))
+        raw_ptr += raw_size
+
+    return bytes(image)
 
 
 class TestPEValidation:
@@ -58,6 +102,42 @@ class TestPEAuthenticode:
     def test_sha256_digest(self, uki_a3: bytes) -> None:
         result = pe_authenticode_digest(uki_a3, algo="sha256")
         assert len(result) == 32
+
+
+class TestPESectionVirtualSize:
+    """The loaded section is raw bytes plus a zero tail, never the next section."""
+
+    def test_virtual_size_smaller_than_raw_is_truncated(self) -> None:
+        pe = build_pe([(".osrel", 5, 512, b"ID=cos\n")])
+        assert pe_extract_section(pe, ".osrel", use_virtual_size=True) == b"ID=co"
+
+    def test_virtual_size_larger_than_raw_is_zero_padded(self) -> None:
+        pe = build_pe([
+            (".cmdline", 600, 512, b"console=ttyS0"),
+            (".sbat", 16, 512, b"SECRET-NEIGHBOUR"),
+        ])
+        content = pe_extract_section(pe, ".cmdline", use_virtual_size=True)
+
+        assert content is not None
+        assert len(content) == 600
+        assert content[:13] == b"console=ttyS0"
+        assert content[13:] == bytes(600 - 13)
+        assert b"SECRET-NEIGHBOUR" not in content
+
+    def test_raw_size_ignores_virtual_size(self) -> None:
+        pe = build_pe([(".cmdline", 600, 512, b"console=ttyS0")])
+        content = pe_extract_section(pe, ".cmdline")
+        assert content is not None
+        assert len(content) == 512
+
+    def test_zero_virtual_size_is_absent(self) -> None:
+        pe = build_pe([(".ucode", 0, 512, b"")])
+        assert pe_extract_section(pe, ".ucode", use_virtual_size=True) is None
+
+    def test_section_past_end_of_image_raises(self) -> None:
+        pe = build_pe([(".initrd", 512, 512, b"payload")])
+        with pytest.raises(ValueError, match="runs past the end"):
+            pe_extract_section(pe[:-64], ".initrd", use_virtual_size=True)
 
 
 class TestPESections:
