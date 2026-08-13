@@ -143,13 +143,32 @@ def pe_authenticode_digest(pe_data: bytes, algo: str = "sha384") -> bytes:
     else:
         cert_entry_off = None
 
+    # Every span below is hashed with a slice, and a slice clamps instead of
+    # failing. Left unchecked, an image that overstates SizeOfHeaders or a
+    # section's extent still produces a digest, just over fewer bytes than it
+    # claims to cover, which is a wrong RTMR[1] that looks like a right one.
+    if size_of_headers > len(pe_data):
+        raise ValueError(
+            f"PE declares SizeOfHeaders {size_of_headers}, past the end of a "
+            f"{len(pe_data)}-byte image"
+        )
+
     sections: list[tuple[int, int]] = []
     for i in range(num_sections):
         so = _section_entry(pe_data, sec_table_off, i)
         raw_size = _read_u32(pe_data, so + 16, "SizeOfRawData")
         raw_ptr = _read_u32(pe_data, so + 20, "PointerToRawData")
-        if raw_size > 0 and raw_ptr > 0:
-            sections.append((raw_ptr, raw_size))
+        if raw_size == 0 or raw_ptr == 0:
+            continue
+        if raw_ptr + raw_size > len(pe_data):
+            name = pe_data[so : so + 8].split(b"\x00", 1)[0].decode(
+                "ascii", errors="replace"
+            )
+            raise ValueError(
+                f"Section {name!r} runs past the end of the PE image: "
+                f"{raw_ptr} + {raw_size} > {len(pe_data)}"
+            )
+        sections.append((raw_ptr, raw_size))
     sections.sort()
 
     h = hashlib.new(algo)
@@ -163,15 +182,28 @@ def pe_authenticode_digest(pe_data: bytes, algo: str = "sha384") -> bytes:
     else:
         after_cert_entry = after_checksum
 
+    if size_of_headers < after_cert_entry:
+        raise ValueError(
+            f"PE declares SizeOfHeaders {size_of_headers}, inside the "
+            f"{after_cert_entry}-byte header prefix the digest already covers"
+        )
     h.update(pe_data[after_cert_entry:size_of_headers])
 
     sum_of_bytes = size_of_headers
     for ptr, size in sections:
-        end = min(ptr + size, len(pe_data))
-        h.update(pe_data[ptr:end])
-        sum_of_bytes += end - ptr
+        h.update(pe_data[ptr : ptr + size])
+        sum_of_bytes += size
 
+    # Authenticode hashes the file tail between the sections and the
+    # certificate table. A certificate size that reaches back into bytes
+    # already hashed leaves that span undefined, so refuse it.
     extra_end = len(pe_data) - cert_table_size
+    if cert_table_size and extra_end < sum_of_bytes:
+        raise ValueError(
+            f"PE declares a {cert_table_size}-byte certificate table, which "
+            f"overlaps the {sum_of_bytes} bytes of headers and sections that "
+            f"come before it in a {len(pe_data)}-byte image"
+        )
     if extra_end > sum_of_bytes:
         h.update(pe_data[sum_of_bytes:extra_end])
 

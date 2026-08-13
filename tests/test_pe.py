@@ -135,9 +135,10 @@ class TestPETruncatedHeaders:
         sec_table_off = _PE_OFFSET + 4 + 20 + _OPT_HDR_SIZE
         truncated = data[: sec_table_off + 60]
         # Ask for a section that is not entry 0, so every reader walks into the
-        # entry the file cannot hold.
+        # entry the file cannot hold. The Authenticode reader refuses earlier,
+        # on the SizeOfHeaders the truncated file can no longer cover.
         for read in self._readers(".absent"):
-            with pytest.raises(ValueError, match="section table entry 1"):
+            with pytest.raises(ValueError, match="section table entry 1|SizeOfHeaders"):
                 read(truncated)
 
 
@@ -160,6 +161,48 @@ class TestPESectionNames:
         sec_table_off = _PE_OFFSET + 4 + 20 + _OPT_HDR_SIZE
         with pytest.raises(ValueError, match="section table entry 0"):
             pe_section_names(pe[: sec_table_off + 8])
+
+
+class TestPEAuthenticodeBounds:
+    """Every Authenticode span is hashed with a slice, and a slice clamps. An
+    image that overstates one still yields a digest, just over fewer bytes than
+    it claims, which is a wrong RTMR[1] that looks like a right one."""
+
+    def test_rejects_size_of_headers_past_end_of_file(self) -> None:
+        pe = bytearray(build_pe([(".linux", 16, 512, b"kernel")]))
+        opt = _PE_OFFSET + 4 + 20
+        struct.pack_into("<I", pe, opt + 60, len(pe) + 1)
+        with pytest.raises(ValueError, match="SizeOfHeaders"):
+            pe_authenticode_digest(bytes(pe))
+
+    def test_rejects_size_of_headers_inside_the_hashed_prefix(self) -> None:
+        pe = bytearray(build_pe([(".linux", 16, 512, b"kernel")]))
+        opt = _PE_OFFSET + 4 + 20
+        struct.pack_into("<I", pe, opt + 60, 8)
+        with pytest.raises(ValueError, match="SizeOfHeaders"):
+            pe_authenticode_digest(bytes(pe))
+
+    def test_rejects_section_past_end_of_file(self) -> None:
+        pe = bytearray(build_pe([(".linux", 16, 512, b"kernel")]))
+        sec_table_off = _PE_OFFSET + 4 + 20 + _OPT_HDR_SIZE
+        struct.pack_into("<I", pe, sec_table_off + 16, len(pe))
+        with pytest.raises(ValueError, match=r"'\.linux' runs past the end"):
+            pe_authenticode_digest(bytes(pe))
+
+    def test_rejects_truncated_image_that_used_to_hash_short(self) -> None:
+        """Dropping the tail of a valid image must fail, not rehash the rest."""
+        pe = build_pe([(".linux", 16, 512, b"kernel")])
+        assert len(pe_authenticode_digest(pe)) == 48
+        with pytest.raises(ValueError, match="runs past the end|SizeOfHeaders"):
+            pe_authenticode_digest(pe[:-8])
+
+    def test_rejects_certificate_table_overlapping_hashed_bytes(self) -> None:
+        pe = bytearray(build_pe([(".linux", 16, 512, b"kernel")]))
+        opt = _PE_OFFSET + 4 + 20
+        cert_entry = opt + 112 + 4 * 8
+        struct.pack_into("<I", pe, cert_entry + 4, len(pe))
+        with pytest.raises(ValueError, match="certificate table"):
+            pe_authenticode_digest(bytes(pe))
 
 
 class TestPEAuthenticode:
