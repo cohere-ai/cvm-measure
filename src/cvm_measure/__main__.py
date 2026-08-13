@@ -12,14 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""cvm-measure: compute expected confidential VM register values from published inputs."""
+"""Allow running as: python -m cvm_measure"""
 
-from importlib.metadata import PackageNotFoundError, version
+from .cli import main
 
-try:
-    # pyproject.toml holds the version; reading it back from the installed
-    # metadata keeps `cvm-measure --version` from drifting away from the
-    # release the tag published.
-    __version__ = version("cvm-measure")
-except PackageNotFoundError:  # pragma: no cover - running from an unbuilt tree
-    __version__ = "0.0.0+unknown"
+main()

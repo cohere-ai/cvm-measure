@@ -11,7 +11,7 @@ Only the latest release of cvm-measure is supported with security updates. We re
 If you discover a security vulnerability in cvm-measure, please report it through one of the following channels:
 
 - **GitHub Security Advisory (preferred):** [Create a private security advisory](https://github.com/cohere-ai/cvm-measure/security/advisories/new)
-- **Email:** [security@cohere.com](mailto:security@cohere.com)
+- **Email:** [inference-confidential-computing@cohere.com](mailto:inference-confidential-computing@cohere.com)
 
 ### What to Include
 

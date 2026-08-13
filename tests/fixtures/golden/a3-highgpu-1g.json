@@ -1,0 +1,13 @@
+{
+  "machine_type": "a3-highgpu-1g",
+  "mrtd": "feb7486608382c1ff0e15b4648ddc0acea6ca974eb53e3529f4c4bd5ffbaa20bf335cb75965cea65fe473aed9647c162",
+  "rtmr0": "1da1ab59b71241ac9d4c758a2cf25df1c7f9e32c5e4995d1ded8f0f03abd33087d98676517d228e2bd02fc9ca9c280d5",
+  "rtmr1": "6308087def87147a13fa1c6262177d44630843f964549c19f360f98afd0b8b16736e49c5d2e721a4b5caee6dcc8c3330",
+  "rtmr2": "fd534af9dc789cfef4e8482f5d51d5bbfcc20cd905f974542c7d0545bfee3effcd5fe53b72ee5d2f9e6673f45851df8c",
+  "rtmr3": "89e0958fbd18f5edae0b04bf2b055f4572606883faa749c800b112ad3e298c13603dbf5791314f00219135df9b9888c9",
+
+  "_events_comment": "Individual digests this VM recorded, so the inputs a register is built from are pinned and not only the folded result. cfv is the RTMR[0] EV_EFI_PLATFORM_FIRMWARE_BLOB2 digest. The two image digests are the RTMR[1] EV_EFI_BOOT_SERVICES_APPLICATION Authenticode digests, in order: firmware measured the PE images it loaded, while the tool recomputes them from the UKI file and its .linux section, so these are what says the two agree.",
+  "cfv": "9cb6bf09aea7b4acb8549e328d0edd6f15defc0b00d744bb9fb5bab0962bc5c70f69d233e96dbc7c1105ba085781dc88",
+  "uki_image_digest": "f30b79c91846626193e6d734f0ac116985c424ffa43035b97f131c63c8e2e07af65bbe9ed9b550f179de9cbbc9406ec6",
+  "kernel_image_digest": "9aadf2533e99db06202754df529507dbe2768ec9facac97b4415c9dfe37c8d790d2a4f30d3f55920c84c94b0c2623b59"
+}
