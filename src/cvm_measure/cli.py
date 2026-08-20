@@ -21,6 +21,9 @@ Usage:
     cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type a3-highgpu-1g -o baseline.json
     cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type a3-highgpu-1g --firmware-sha384 abc...def
     cvm-measure tdx replay --ccel ccel.bin
+    cvm-measure azure-snp --disk disk.raw
+    cvm-measure azure-snp --disk disk.raw --initdata initdata.toml --output-format json
+    cvm-measure azure-snp replay --eventlog binary_bios_measurements.bin
     cvm-measure extract-uki --disk disk.raw --output BOOTX64.EFI
     cvm-measure extract-uki --disk disk.tar.gz --output BOOTX64.EFI
 """
@@ -87,6 +90,25 @@ def main(argv: list[str] | None = None) -> None:
     )
     rp_parser.add_argument("--ccel", required=True, type=Path, help="Path to CCEL binary")
 
+    # -- azure-snp -------------------------------------------------------------
+    azure_parser = sub.add_parser("azure-snp", help="Azure SEV-SNP vTPM measurement")
+    azure_sub = azure_parser.add_subparsers(dest="command", required=False)
+
+    # -- azure-snp (default: compute) ------------------------------------------
+    _add_azure_compute_args(azure_parser)
+
+    # -- azure-snp replay ------------------------------------------------------
+    ar_parser = azure_sub.add_parser(
+        "replay",
+        help="Replay a TCG event log to compute PCR values",
+    )
+    ar_parser.add_argument(
+        "--eventlog",
+        required=True,
+        type=Path,
+        help="Path to binary_bios_measurements",
+    )
+
     args = parser.parse_args(argv)
 
     if args.subcommand is None:
@@ -102,6 +124,11 @@ def main(argv: list[str] | None = None) -> None:
             _cmd_replay(args)
         else:
             _cmd_compute(args, tdx_parser)
+    elif args.subcommand == "azure-snp":
+        if args.command == "replay":
+            _cmd_azure_replay(args)
+        else:
+            _cmd_azure_compute(args, azure_parser)
 
 
 def _add_compute_args(parser: argparse.ArgumentParser) -> None:
@@ -134,6 +161,43 @@ def _add_compute_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--rtmr3", type=str, default=None, help="Pre-computed RTMR[3] hex (96 chars)")
     parser.add_argument("--initdata", type=Path, default=None, help="Path to initdata TOML; computes RTMR[3] automatically (mutually exclusive with --rtmr3)")
+    parser.add_argument(
+        "--output-format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format: 'text' (default) or 'json'",
+    )
+
+
+def _add_azure_compute_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--disk",
+        type=Path,
+        help="Path to pod VM disk image (.raw or .tar.gz)",
+    )
+    parser.add_argument(
+        "--uki",
+        type=Path,
+        default=None,
+        help="Path to UKI (BOOTX64.EFI); extracted from --disk if omitted",
+    )
+    parser.add_argument(
+        "--max-extract-bytes",
+        type=int,
+        default=DEFAULT_MAX_EXTRACT_BYTES,
+        help=(
+            "Cap on bytes unpacked from a .tar.gz disk image "
+            f"(default: {DEFAULT_MAX_EXTRACT_BYTES})"
+        ),
+    )
+    pcr8 = parser.add_mutually_exclusive_group()
+    pcr8.add_argument(
+        "--initdata",
+        type=Path,
+        default=None,
+        help="Path to initdata TOML; PCR 8 is computed from it",
+    )
+    pcr8.add_argument("--pcr8", type=str, default=None, help="Pre-computed PCR 8 hex (64 chars)")
     parser.add_argument(
         "--output-format",
         choices=["text", "json"],
@@ -220,13 +284,72 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
     _output_registers(regs.as_dict(), args.output_format)
 
 
+def _load_uki(args: argparse.Namespace) -> bytes:
+    """Read the UKI from --uki, or extract it from --disk."""
+    if args.uki is not None:
+        _require_file(args.uki, "--uki")
+        uki_path: Path = args.uki
+        return uki_path.read_bytes()
+
+    import tempfile
+
+    from .disk import extract_uki
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        extracted = Path(tmpdir) / "BOOTX64.EFI"
+        extract_uki(args.disk, extracted, args.max_extract_bytes)
+        return extracted.read_bytes()
+
+
+def _cmd_azure_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if args.disk is None:
+        parser.error("--disk is required")
+    _require_file(args.disk, "--disk")
+    if args.initdata is not None:
+        _require_file(args.initdata, "--initdata")
+
+    from .azure_snp import compute_all_pcrs
+    from .azure_snp.registers import roothash
+    from .disk import gpt_event_data
+
+    uki = _load_uki(args)
+    pcrs = compute_all_pcrs(
+        uki,
+        gpt_event_data(args.disk, args.max_extract_bytes),
+        initdata=args.initdata,
+        pcr8_hex=args.pcr8,
+    )
+
+    output = pcrs.as_dict()
+    verity_roothash = roothash(uki)
+    if verity_roothash is not None:
+        output["roothash"] = verity_roothash
+
+    _output_registers(output, args.output_format)
+
+
+def _cmd_azure_replay(args: argparse.Namespace) -> None:
+    from .azure_snp.eventlog import parse_event_log, replay_event_log
+
+    _require_file(args.eventlog, "--eventlog")
+    log = parse_event_log(args.eventlog.read_bytes())
+    pcrs = replay_event_log(log)
+
+    for i in sorted(pcrs):
+        print(f"pcr{i}: {pcrs[i].hex()}")
+
+
 def _output_registers(data: dict[str, str], fmt: str) -> None:
     if fmt == "json":
         import json
         print(json.dumps(data, indent=2))
     else:
+        # Pad to the widest label so the values line up. Register names differ
+        # in length within a platform ("pcr4" against "roothash") and between
+        # them, so the column cannot be a constant.
+        label_width = max((len(key) for key in data), default=0) + 1
         for key, value in data.items():
-            print(f"{key}:  {value}" if key == "mrtd" else f"{key}: {value}")
+            print(f"{key + ':':<{label_width}} {value}")
 
 
 def _cmd_extract_baseline(args: argparse.Namespace) -> None:

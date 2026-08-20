@@ -45,7 +45,7 @@ def replay_events(
         digest = event.digests.get(algo_id)
         if digest is None:
             continue
-        imr = event.imr_index
+        imr = event.register_index
         if not (0 <= imr < NUM_RTMRS):
             continue
         rtmrs[imr] = hashlib.sha384(rtmrs[imr] + digest).digest()
