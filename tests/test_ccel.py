@@ -106,7 +106,7 @@ class TestCCELParser:
         data = build_spec_id_event() + build_event2(mr_index=2)
         log = parse_event_log(data)
         assert log.digest_sizes == [SHA384]
-        assert [e.imr_index for e in log.events] == [0, 1]
+        assert [e.register_index for e in log.events] == [0, 1]
 
     @pytest.mark.parametrize("pad", [b"\xff", b"\x00"])
     def test_accepts_table_padding_after_last_event(self, pad: bytes) -> None:
@@ -281,7 +281,7 @@ class TestEventValidation:
 
     def test_rejects_measured_event_outside_the_rtmrs(self) -> None:
         data = build_spec_id_event() + build_event2(mr_index=0)
-        with pytest.raises(ValueError, match="not an RTMR"):
+        with pytest.raises(ValueError, match="not a measurement register"):
             parse_event_log(data)
 
     def test_allows_no_action_event_outside_the_rtmrs(self) -> None:
@@ -290,5 +290,5 @@ class TestEventValidation:
             mr_index=0, event_type=EV_NO_ACTION
         )
         log = parse_event_log(data)
-        assert log.events[1].imr_index == -1
+        assert log.events[1].register_index == -1
         assert log.measurable_events == []

@@ -31,43 +31,25 @@ import hashlib
 import struct
 from dataclasses import dataclass
 
+from ..uki import (
+    UKI_MEASURED_SECTIONS,
+    UKI_PROFILE_SECTION,
+    UKI_UNMEASURED_SECTION,
+    measured_sections,
+)
 from .baseline import Baseline
 from .mrtd import cfv_image, compute_mrtd
-from .pe import pe_authenticode_digest, pe_extract_section, pe_section_names
+from .pe import pe_authenticode_digest, pe_extract_section
 from .rtmr import SHA384_SIZE, replay_digests
 from .uefi import compute_secureboot_digest
 
-# systemd's canonical measurement order for UKI sections, from the
-# UnifiedSection enum in src/fundamental/uki.h ("PLEASE DO NOT REORDER").
-# systemd-stub walks the enum and measures every section it finds, so the list
-# has to be complete: a section missing from here would be skipped silently and
-# RTMR[2] would come out wrong rather than absent.
-UKI_MEASURED_SECTIONS = [
-    ".linux",
-    ".osrel",
-    ".cmdline",
-    ".initrd",
-    ".ucode",
-    ".splash",
-    ".dtb",
-    ".uname",
-    ".sbat",
-    # .pcrsig sits here in the enum. It signs the expected result of the
-    # measurement, so systemd is careful not to feed it back in.
-    ".pcrpkey",
-    ".profile",
-    ".dtbauto",
-    ".hwids",
-    ".efifw",
+__all__ = [
+    "UKI_MEASURED_SECTIONS",
+    "UKI_PROFILE_SECTION",
+    "UKI_UNMEASURED_SECTION",
+    "ComputedRegisters",
+    "compute_all",
 ]
-
-UKI_UNMEASURED_SECTION = ".pcrsig"
-
-# .profile keeps its place in the canonical order above, but a UKI that carries
-# one is refused rather than measured: profiles repeat section names, one group
-# per profile, and systemd-stub measures the group the profile selected at boot
-# resolves to. Which group that is cannot be decided from the image alone.
-UKI_PROFILE_SECTION = ".profile"
 
 SEPARATOR_DIGEST = hashlib.sha384(struct.pack("<I", 0)).digest()
 
@@ -348,40 +330,9 @@ def _compute_rtmr2(uki: bytes) -> str:
       1. SHA-384(section_name + '\\0')
       2. SHA-384(section_content)
     """
-    _reject_unmodelled_uki(uki)
-
     digests = []
-    for section_name in UKI_MEASURED_SECTIONS:
-        content = pe_extract_section(uki, section_name, use_virtual_size=True)
-        if content is None:
-            continue
+    for section_name, content in measured_sections(uki, register="RTMR[2]"):
         digests.append(hashlib.sha384((section_name + "\0").encode("ascii")).digest())
         digests.append(hashlib.sha384(content).digest())
 
     return replay_digests(digests).hex()
-
-
-def _reject_unmodelled_uki(uki: bytes) -> None:
-    """Refuse a UKI whose measured section sequence is not the canonical one."""
-    names = pe_section_names(uki)
-    if UKI_PROFILE_SECTION in names:
-        raise ValueError(
-            f"UKI carries a {UKI_PROFILE_SECTION} section, so what gets measured "
-            "into RTMR[2] depends on which profile is selected at boot. This tool "
-            "measures a single section sequence, so refusing rather than modelling "
-            "one arbitrary profile."
-        )
-
-    repeated = sorted(
-        {
-            name
-            for name in names
-            if name in UKI_MEASURED_SECTIONS and names.count(name) > 1
-        }
-    )
-    if repeated:
-        raise ValueError(
-            f"UKI repeats measured section(s) {', '.join(repeated)}. systemd-stub "
-            "measures one of each, and which one is not decidable from the image "
-            "alone, so refusing to compute RTMR[2]."
-        )

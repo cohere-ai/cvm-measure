@@ -193,7 +193,7 @@ def extract_from_ccel(ccel_data: bytes, machine_type: str) -> Baseline:
     )
 
     for event in log.measurable_events:
-        rtmr = event.imr_index
+        rtmr = event.register_index
 
         if (
             rtmr == 0
