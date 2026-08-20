@@ -1,0 +1,19 @@
+{
+  "machine_type": "Standard_NCC40ads_H100_v5",
+
+  "_pcrs_comment": "Every PCR this VM reported in its SHA-256 bank, from a signed vTPM quote. PCRs 0-7, 9 and 11 come from the firmware event log in fixtures/eventlog/, captured from the same boot, so replaying that log has to reproduce them. PCR 8 is here too but is not in the log: process-user-data extends it from userspace after the log is closed. PCR 10 is omitted because IMA keeps extending it as files are measured, so it has no settled value.",
+  "pcr0": "13177a6535badf19415c06589705dd5a1890f73545c4a9fef7acfe2c6177a2b7",
+  "pcr1": "3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969",
+  "pcr2": "3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969",
+  "pcr3": "3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969",
+  "pcr4": "03e74ac8fa511490ba4ff0ec69c772da29b17a43aa0a0589bc852a9b21b21f70",
+  "pcr5": "f27e34c2b08d44128732d3e7a936e72f9b9b3608e249ab05143c76fc670fe1be",
+  "pcr6": "9cedbc357e714ab4c76eae1e2280adb52d4675485c71408c1c1580e661522535",
+  "pcr7": "00596cc1512b063c798b9ecbab030138e10b3d40ac0a9cc8452d84aeb515d73e",
+  "pcr8": "4b58b30becd30d16f7f60d56b32661d921ae0d3310c6a89f5d552f9bfee921a9",
+  "pcr9": "e95cd6d35a12bf74964972550336f4226e1fcfdd7e268c5be5872df0da5e72d9",
+  "pcr11": "12a8c871659de2947c3776771755bb66b346942011f68b1e2ae0e7004d5e8538",
+
+  "_initdata_comment": "This VM was launched standalone with no peer-pod userdata, so process-user-data synthesised the initdata in fixtures/initdata/coco-dummy.toml. Its digest is what PCR 8 above was extended with.",
+  "initdata_digest": "adb48cc14fea9403d3d51f3b5f5068fd4d80445a14e94f1b3d5dbabaad66478d"
+}
