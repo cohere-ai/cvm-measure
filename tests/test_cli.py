@@ -219,6 +219,72 @@ class TestCLIInitdata:
             _resolve_rtmr3(args, parser)
 
 
+class TestCLIAzureSnp:
+    """The Azure path runs end to end here: a synthetic GPT disk plus an
+    explicit --uki needs no mtools, so none of this is skipped."""
+
+    def _disk_and_uki(self, tmp_path):
+        from .test_azure_snp import build_uki
+        from .test_disk import _build_measurable_gpt_disk
+
+        disk_bytes, _, _ = _build_measurable_gpt_disk()
+        disk = tmp_path / "disk.raw"
+        disk.write_bytes(disk_bytes)
+
+        uki = tmp_path / "BOOTX64.EFI"
+        uki.write_bytes(build_uki(cmdline=b"console=ttyS0 roothash=deadbeef"))
+        return disk, uki
+
+    def test_compute_reports_five_pcrs_and_the_roothash(self, tmp_path, capsys) -> None:
+        disk, uki = self._disk_and_uki(tmp_path)
+        main(["azure-snp", "--disk", str(disk), "--uki", str(uki), "--output-format", "json"])
+
+        data = json.loads(capsys.readouterr().out)
+        assert set(data) == {"pcr4", "pcr5", "pcr8", "pcr9", "pcr11", "roothash"}
+        assert data["roothash"] == "deadbeef"
+        assert data["pcr8"] == "00" * 32, "no initdata supplied"
+
+    def test_initdata_resolves_pcr8(self, tmp_path, capsys, azure_initdata) -> None:
+        disk, uki = self._disk_and_uki(tmp_path)
+        main([
+            "azure-snp",
+            "--disk", str(disk),
+            "--uki", str(uki),
+            "--initdata", str(azure_initdata),
+            "--output-format", "json",
+        ])
+
+        from cvm_measure.azure_snp import compute_pcr8
+        from cvm_measure.initdata import compute_digest
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["pcr8"] == compute_pcr8(compute_digest(azure_initdata))
+
+    def test_initdata_and_pcr8_mutually_exclusive(self, tmp_path, azure_initdata) -> None:
+        disk, uki = self._disk_and_uki(tmp_path)
+        with pytest.raises(SystemExit):
+            main([
+                "azure-snp",
+                "--disk", str(disk),
+                "--uki", str(uki),
+                "--initdata", str(azure_initdata),
+                "--pcr8", "ab" * 32,
+            ])
+
+    def test_replay_prints_the_registers_the_vm_signed(
+        self, tmp_path, capsys, azure_eventlog, azure_golden
+    ) -> None:
+        log = tmp_path / "binary_bios_measurements.bin"
+        log.write_bytes(azure_eventlog)
+        main(["azure-snp", "replay", "--eventlog", str(log)])
+
+        printed = dict(
+            line.split(": ", 1) for line in capsys.readouterr().out.splitlines()
+        )
+        assert printed == {k: v for k, v in azure_golden.items() if k in printed}
+        assert "pcr8" not in printed
+
+
 class TestCLIOutputFormat:
 
     def test_output_format_json(self, capsys) -> None:

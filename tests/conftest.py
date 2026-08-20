@@ -107,3 +107,28 @@ def uki_a3() -> bytes:
     if not path.exists():
         pytest.skip(f"UKI fixture not found: {path}")
     return path.read_bytes()
+
+
+# -- Azure SEV-SNP -------------------------------------------------------------
+#
+# Committed, so nothing that uses them is ever skipped. See
+# fixtures/eventlog/README.md for how they were captured.
+
+AZURE_MACHINE_TYPE = "azure-snp-ncc40ads-h100-v5"
+
+
+@pytest.fixture
+def azure_eventlog() -> bytes:
+    return (FIXTURES_DIR / "eventlog" / f"{AZURE_MACHINE_TYPE}.bin").read_bytes()
+
+
+@pytest.fixture
+def azure_golden() -> dict[str, str]:
+    """PCR values from the same VM's signed vTPM quote."""
+    data = json.loads((FIXTURES_DIR / "golden" / f"{AZURE_MACHINE_TYPE}.json").read_text())
+    return {k: v for k, v in data.items() if not k.startswith("_")}
+
+
+@pytest.fixture
+def azure_initdata() -> Path:
+    return FIXTURES_DIR / "initdata" / "coco-dummy.toml"
