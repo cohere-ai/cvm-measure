@@ -417,6 +417,10 @@ These apply to both platforms. They are real attack surfaces that require separa
 
 - **TLS channel binding**: The connection between a user and the CVM is not cryptographically bound to the attestation report by this tool.
 
+### The baseline trust model
+
+The baseline follows a Trust-On-First-Use (TOFU) model. The 14 VMM-generated events in the baseline cannot be independently computed -- they must be captured from a running VM. Users can verify a published baseline by replaying the CCEL and checking that the resulting RTMRs match the hardware-signed attestation report, but they must trust that the CCEL was captured from a correctly-configured VM.
+
 ## Development
 
 ```bash
