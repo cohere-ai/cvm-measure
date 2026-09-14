@@ -12,24 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CoCo initdata SHA-384 digest computation.
+"""CoCo initdata digest for TDX, which is always SHA-384.
 
-Computes the initdata digest from a CoCo initdata TOML file per the
-Confidential Containers Trustee specification. The digest is simply
-SHA-384 of the raw TOML file bytes.
-
-Format reference: https://github.com/confidential-containers/trustee/blob/main/kbs/docs/initdata.md
+RTMR[3] is extended through
+/sys/devices/virtual/misc/tdx_guest/measurements/rtmr3:sha384, a 48-byte
+interface that cannot carry a shorter digest, so an initdata file asking for
+any other algorithm describes a measurement this platform cannot perform.
 """
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
+from ..initdata import compute_digest as _compute_digest
 
-def compute_digest(path: Path) -> bytes:
-    """Compute SHA-384 of the raw TOML file bytes.
+TDX_ALGORITHM = "sha384"
 
-    Per the CoCo spec, the initdata digest is the hash of the entire file.
-    """
-    return hashlib.sha384(path.read_bytes()).digest()
+
+def compute_digest(initdata: Path | bytes) -> bytes:
+    """Compute SHA-384 of the raw TOML bytes, from a path or the bytes."""
+    return _compute_digest(initdata, require=TDX_ALGORITHM)
