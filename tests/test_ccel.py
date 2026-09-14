@@ -108,6 +108,11 @@ class TestCCELParser:
         assert log.digest_sizes == [SHA384]
         assert [e.imr_index for e in log.events] == [0, 1]
 
+    def test_names_efi_variable_authority_event(self) -> None:
+        data = build_spec_id_event() + build_event2(event_type=0x800000E0)
+        log = parse_event_log(data)
+        assert log.events[-1].event_type_name == "EV_EFI_VARIABLE_AUTHORITY"
+
     @pytest.mark.parametrize("pad", [b"\xff", b"\x00"])
     def test_accepts_table_padding_after_last_event(self, pad: bytes) -> None:
         data = build_spec_id_event() + build_event2() + pad * 4096
