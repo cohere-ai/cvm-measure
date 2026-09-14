@@ -75,22 +75,35 @@ SEPARATOR_DIGEST = hashlib.sha384(struct.pack("<I", 0)).digest()
 _RTMR0_FIXED_LABELS = ("TdxTable", "PK", "KEK", "db", "dbx")
 
 # The remaining RTMR[0] events are replayed positionally, because three
-# consecutive ACPI_DATA events are indistinguishable by label. That only works
-# for firmware measuring this exact sequence, which is the GCP A3 OVMF build.
-# TODO(CC-167): keep an ordered CCEL template with placeholders for the
-# computable events, so other firmware can be reconstructed by substitution
-# instead of relying on a hard-coded sequence.
-_RTMR0_TRAILING_LABELS = (
-    "ACPI_DATA",
-    "ACPI_DATA",
-    "ACPI_DATA",
-    "BootOrder",
-    "Boot0001",
-    "Boot0002",
-    "Boot0003",
-    "Boot0000",
+# consecutive ACPI_DATA events are indistinguishable by label. Each tuple is an
+# exact sequence observed from a verified GCP A3 firmware baseline.
+_RTMR0_TRAILING_TEMPLATES = (
+    (
+        "ACPI_DATA",
+        "ACPI_DATA",
+        "ACPI_DATA",
+        "BootOrder",
+        "Boot0001",
+        "Boot0002",
+        "Boot0003",
+        "Boot0000",
+    ),
+    (
+        "ACPI_DATA",
+        "ACPI_DATA",
+        "ACPI_DATA",
+        "BootOrder",
+        "Boot0004",
+        "Boot0001",
+        "Boot0002",
+        "Boot0003",
+        "Boot0000",
+        "EV_EFI_VARIABLE_AUTHORITY",
+    ),
 )
-_RTMR0_EXPECTED_LABELS = _RTMR0_FIXED_LABELS + _RTMR0_TRAILING_LABELS
+_RTMR0_EXPECTED_TEMPLATES = tuple(
+    _RTMR0_FIXED_LABELS + trailing for trailing in _RTMR0_TRAILING_TEMPLATES
+)
 
 # Labels a baseline may use for the EV_EFI_GPT_EVENT digest. Baselines
 # extracted by this tool omit it, since it is computed from --disk instead.
@@ -210,7 +223,7 @@ def _compute_mrtd(
 def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:
     """Compute RTMR[0] from firmware + baseline events.
 
-    Event order (16 total):
+    Fixed event prefix:
       1.  TdxTable                    (baseline event)
       2.  CFV = SHA-384(CFV region)    (located via firmware TDX metadata)
       3.  SecureBoot                  (computed from secureboot_enabled flag)
@@ -219,19 +232,11 @@ def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:
       6.  db                         (baseline event)
       7.  dbx                        (baseline event)
       8.  Separator = SHA-384(0u32)   (computed constant)
-      9.  ACPI_DATA                  (baseline event)
-      10. ACPI_DATA                  (baseline event)
-      11. ACPI_DATA                  (baseline event)
-      12. BootOrder                  (baseline event)
-      13. Boot0001                   (baseline event)
-      14. Boot0002                   (baseline event)
-      15. Boot0003                   (baseline event)
-      16. Boot0000                   (baseline event)
 
     The five fixed events are looked up by label so that a baseline whose
     events are ordered differently fails loudly instead of replaying the
-    wrong digest in the wrong slot. The trailing ACPI and Boot events keep
-    their baseline order, which is the order firmware measured them in.
+    wrong digest in the wrong slot. Remaining events must match one verified
+    trailing template and retain the order in which firmware measured them.
     """
     baseline_events = baseline.rtmr_events(0)
     by_label: dict[str, str] = {}
@@ -245,19 +250,22 @@ def _compute_rtmr0(firmware: bytes, baseline: Baseline) -> str:
         )
 
     labels = [event.label for event in baseline_events]
-    if sorted(labels) != sorted(_RTMR0_EXPECTED_LABELS):
+    if not any(
+        sorted(labels) == sorted(expected)
+        for expected in _RTMR0_EXPECTED_TEMPLATES
+    ):
         raise ValueError(
-            f"RTMR[0] baseline for {baseline.machine_type!r} does not match the only "
-            f"supported event set. Expected {list(_RTMR0_EXPECTED_LABELS)}, got {labels}. "
+            f"RTMR[0] baseline for {baseline.machine_type!r} does not match a "
+            f"supported event set. Got {labels}. "
             "Reconstructing other firmware needs an ordered CCEL template."
         )
 
     fixed = set(_RTMR0_FIXED_LABELS)
     trailing = [event for event in baseline_events if event.label not in fixed]
-    if tuple(e.label for e in trailing) != _RTMR0_TRAILING_LABELS:
+    trailing_labels = tuple(event.label for event in trailing)
+    if trailing_labels not in _RTMR0_TRAILING_TEMPLATES:
         raise ValueError(
-            "RTMR[0] baseline events are in an unsupported order: expected "
-            f"{list(_RTMR0_TRAILING_LABELS)} after the Secure Boot variables, got "
+            "RTMR[0] baseline events are in an unsupported order: got "
             f"{[e.label for e in trailing]}. These are replayed positionally, so the "
             "order has to match the firmware that produced them."
         )
