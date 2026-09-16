@@ -265,6 +265,55 @@ class TestRTMR0FromCCEL:
         with pytest.raises(ValueError, match="unsupported order"):
             compute_all(firmware_a3, uki_a3, baseline_a3, ram_gib=234)
 
+    def test_rtmr0_accepts_new_gcp_firmware_event_sequence(
+        self, monkeypatch
+    ) -> None:
+        from cvm_measure.tdx.baseline import Baseline, BaselineEvent
+        from cvm_measure.tdx.registers import _compute_rtmr0
+        from cvm_measure.tdx.uefi import compute_secureboot_digest
+
+        labels = [
+            "TdxTable",
+            "PK",
+            "KEK",
+            "db",
+            "dbx",
+            "ACPI_DATA",
+            "ACPI_DATA",
+            "ACPI_DATA",
+            "BootOrder",
+            "Boot0004",
+            "Boot0001",
+            "Boot0002",
+            "Boot0003",
+            "Boot0000",
+            "EV_EFI_VARIABLE_AUTHORITY",
+        ]
+        events = [
+            BaselineEvent(
+                rtmr=0,
+                event_type="test",
+                label=label,
+                digest=bytes([index + 1] * 48).hex(),
+            )
+            for index, label in enumerate(labels)
+        ]
+        baseline = Baseline(machine_type="a3-highgpu-1g", events=events)
+        monkeypatch.setattr("cvm_measure.tdx.registers.cfv_image", lambda _: b"cfv")
+
+        expected_digests = [
+            bytes.fromhex(events[0].digest),
+            hashlib.sha384(b"cfv").digest(),
+            compute_secureboot_digest("SecureBoot", b"\x00"),
+            *(bytes.fromhex(event.digest) for event in events[1:5]),
+            SEPARATOR_DIGEST,
+            *(bytes.fromhex(event.digest) for event in events[5:]),
+        ]
+
+        assert _compute_rtmr0(b"firmware", baseline) == replay_digests(
+            expected_digests
+        ).hex()
+
     def test_rtmr0_rejects_unrecognized_event_set(
         self, firmware_a3, uki_a3, baseline_a3
     ) -> None:
