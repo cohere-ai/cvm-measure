@@ -161,17 +161,20 @@ def find_esp_offset(path: str | Path) -> int:
     raise ValueError("No EFI System Partition found")
 
 
-def compute_gpt_digest(
+def gpt_event_data(
     disk: str | Path,
     max_extract_bytes: int = DEFAULT_MAX_EXTRACT_BYTES,
 ) -> bytes:
-    """Compute the SHA-384 digest for the UEFI EV_EFI_GPT_EVENT data.
+    """Build the UEFI EV_EFI_GPT_EVENT data for a disk image.
 
     Mirrors Tcg2MeasureGptTable() in EDK2 DxeTpm2MeasureBootLib, which hashes
     an EFI_GPT_DATA laid out as the 92-byte EFI_PARTITION_TABLE_HEADER copied
     verbatim from LBA 1, a UINT64 count of non-empty partition entries, then
     those entries. The header's own NumberOfPartitionEntries and HeaderCRC32
     fields are measured as they appear on disk.
+
+    Returned unhashed because platforms disagree only about the hash: TDX
+    folds this into RTMR[1] with SHA-384, the vTPM into PCR 5 with SHA-256.
     """
     raw_path, cleanup = _resolve_raw_disk(Path(disk), max_extract_bytes)
     try:
@@ -180,8 +183,15 @@ def compute_gpt_digest(
         if cleanup is not None:
             cleanup.cleanup()
 
-    event_data = header + struct.pack("<Q", len(entries)) + b"".join(entries)
-    return hashlib.sha384(event_data).digest()
+    return header + struct.pack("<Q", len(entries)) + b"".join(entries)
+
+
+def compute_gpt_digest(
+    disk: str | Path,
+    max_extract_bytes: int = DEFAULT_MAX_EXTRACT_BYTES,
+) -> bytes:
+    """Compute the SHA-384 digest for the UEFI EV_EFI_GPT_EVENT data."""
+    return hashlib.sha384(gpt_event_data(disk, max_extract_bytes)).digest()
 
 
 def _copy_bounded(source: IO[bytes], dest: IO[bytes], limit: int, name: str) -> None:
