@@ -340,6 +340,6 @@ def roothash(uki: bytes) -> str | None:
     otherwise means hexdumping an 80 MB UKI.
     """
     for token in uki_cmdline(uki).split():
-        if token.startswith(("roothash=", "usrhash=")):
+        if token.startswith("roothash="):
             return token.split("=", 1)[1]
     return None
