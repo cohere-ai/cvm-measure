@@ -32,6 +32,11 @@ _PE_OFFSET = 0x80
 _OPT_HDR_SIZE = 240
 
 
+def stub_magic(major: int) -> bytes:
+    """A systemd-stub .sdmagic section for the given major version."""
+    return f"#### LoaderInfo: systemd-stub {major}.5-test ####".encode() + b"\0"
+
+
 def build_pe(
     sections: list[tuple[str, int, int, bytes]],
     size_of_image: int | None = None,

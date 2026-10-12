@@ -49,7 +49,7 @@ from cvm_measure.tcg import (
 )
 
 from .test_disk import _build_measurable_gpt_disk
-from .test_pe import build_pe
+from .test_pe import build_pe, stub_magic
 
 # The event sequence each register is built from, as the live firmware
 # recorded it. These are the recipes the _compute_pcrN docstrings describe;
@@ -85,6 +85,7 @@ def build_uki(
     kernel = build_pe([(".text", 16, 16, b"kernel-payload!!")])
     sections: dict[str, bytes] = {
         ".text": text,
+        ".sdmagic": stub_magic(256),
         ".linux": kernel,
         ".osrel": b'ID=test\n',
         ".cmdline": cmdline,
@@ -163,7 +164,7 @@ class TestPcr11:
         section table must not move PCR 11."""
         forward = build_uki()
         shuffled = build_uki(
-            order=[".sbat", ".uname", ".ucode", ".initrd", ".cmdline", ".osrel", ".linux", ".text"]
+            order=[".sbat", ".uname", ".ucode", ".initrd", ".cmdline", ".osrel", ".linux", ".sdmagic", ".text"]
         )
         assert compute_pcrs(shuffled).pcr11 == compute_pcrs(forward).pcr11
 
@@ -241,6 +242,7 @@ class TestPcr4:
                 (name, len(data), len(data), data)
                 for name, data in {
                     ".text": b"stub-code",
+                    ".sdmagic": stub_magic(256),
                     ".linux": build_pe([(".text", 16, 16, b"OTHER-payload!!!")]),
                     ".osrel": b"ID=test\n",
                     ".cmdline": b"console=ttyS0",
@@ -252,6 +254,25 @@ class TestPcr4:
             ]
         )
         assert compute_pcrs(base).pcr4 != compute_pcrs(other_kernel).pcr4
+
+    def test_v258_stub_drops_the_inner_kernel_event(self) -> None:
+        """systemd-stub v258+ starts the kernel itself, so firmware never
+        logs it: PCR 4 is the UKI alone, and the kernel no longer moves it."""
+        def uki(stub: int, kernel_payload: bytes) -> bytes:
+            return build_uki(extra={
+                ".sdmagic": stub_magic(stub),
+                ".linux": build_pe([(".text", 16, 16, kernel_payload)]),
+            })
+
+        new = uki(259, b"kernel-payload!!")
+        from cvm_measure.tdx.pe import pe_authenticode_digest
+
+        assert compute_pcrs(new).pcr4 == replay_digests([
+            EFI_ACTION_DIGESTS["Calling EFI Application from Boot Option"],
+            SEPARATOR_DIGEST,
+            pe_authenticode_digest(new, "sha256"),
+        ]).hex()
+        assert compute_pcrs(uki(256, b"kernel-payload!!")).pcr4 != compute_pcrs(new).pcr4
 
 
 class TestPcr5:
@@ -356,7 +377,7 @@ class TestRefusals:
             compute_pcrs(uki)
 
     def test_uki_without_a_cmdline_section(self) -> None:
-        uki = build_uki(order=[".text", ".linux", ".osrel", ".initrd", ".ucode"])
+        uki = build_uki(order=[".text", ".sdmagic", ".linux", ".osrel", ".initrd", ".ucode"])
         with pytest.raises(ValueError, match="no .cmdline section"):
             compute_pcrs(uki)
 

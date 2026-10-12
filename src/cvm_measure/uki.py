@@ -26,6 +26,8 @@ it into RTMR[2] with SHA-384, the vTPM into PCR 11 with SHA-256.
 
 from __future__ import annotations
 
+import re
+
 from .tdx.pe import pe_extract_section, pe_section_names
 
 # systemd's canonical measurement order for UKI sections, from the
@@ -106,3 +108,44 @@ def reject_unmodelled_uki(uki: bytes, register: str) -> None:
             "measures one of each, and which one is not decidable from the image "
             f"alone, so refusing to compute {register}."
         )
+
+
+# systemd-stub records its version in .sdmagic as
+# "#### LoaderInfo: systemd-stub <version> ####".
+_STUB_MAGIC = re.compile(rb"#### LoaderInfo: systemd-stub (\d+)[^#]* ####")
+
+# systemd v258 ("stub: call inner kernel directly", systemd cab9c7b5a4) stopped
+# handing the embedded kernel to firmware LoadImage(). Earlier stubs did, so
+# firmware measured the kernel as a second EV_EFI_BOOT_SERVICES_APPLICATION.
+# v258+ maps and starts the kernel itself, and firmware never sees it.
+STUB_DIRECT_KERNEL_VERSION = 258
+
+
+def stub_version(uki: bytes) -> int:
+    """The systemd-stub major version, read from the UKI's .sdmagic section."""
+    magic = pe_extract_section(uki, ".sdmagic", use_virtual_size=True)
+    match = _STUB_MAGIC.search(magic or b"")
+    if match is None:
+        raise ValueError(
+            "UKI has no systemd-stub .sdmagic version, so whether firmware "
+            "measured the embedded kernel cannot be decided"
+        )
+    return int(match.group(1))
+
+
+def firmware_measures_kernel(uki: bytes, *, secure_boot: bool = False) -> bool:
+    """Whether firmware logs the UKI's .linux kernel as a boot application.
+
+    True for systemd-stub before v258, which loads the kernel through firmware
+    LoadImage(). From v258 the stub starts the kernel itself unless Secure Boot
+    is on with a shim loader, so that one case is refused rather than guessed.
+    """
+    if stub_version(uki) < STUB_DIRECT_KERNEL_VERSION:
+        return True
+    if secure_boot:
+        raise ValueError(
+            "systemd-stub v258+ with Secure Boot may load the kernel through "
+            "shim's LoadImage(), depending on the shim version. This tool does "
+            "not model that boot chain."
+        )
+    return False

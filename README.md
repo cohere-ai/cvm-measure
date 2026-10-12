@@ -222,7 +222,7 @@ passing both is refused.
 |----------|--------|-------------|
 | MRTD | Firmware + RAM topology | Measures the initial TD memory image (firmware code/data + TDHOB) |
 | RTMR[0] | Firmware + baseline | Firmware config: TdxTable, CFV, SecureBoot, PK/KEK/db/dbx, ACPI, boot vars |
-| RTMR[1] | UKI + baseline | Boot chain: EFI actions, GPT, UKI Authenticode hash, kernel Authenticode hash |
+| RTMR[1] | UKI + baseline | Boot chain: EFI actions, GPT, UKI Authenticode hash, kernel Authenticode hash (systemd-stub before v258 only; v258+ starts the kernel itself, so firmware does not measure it) |
 | RTMR[2] | UKI | OS identity: systemd-stub measured UKI sections (.linux, .osrel, .cmdline, .initrd, .uname, .sbat) |
 | RTMR[3] | initdata (optional) | CoCo initdata digest (runtime policy). Defaults to zeros if not provided |
 
@@ -329,13 +329,13 @@ Intel TDX:
 
 - MRTD: firmware identity (code + data pages measured during TD build)
 - RTMR[0]: firmware configuration (CFV, SecureBoot state, certificate databases, ACPI tables, boot variables)
-- RTMR[1]: boot chain (EFI boot actions, GPT, UKI + kernel Authenticode hashes)
+- RTMR[1]: boot chain (EFI boot actions, GPT, UKI + kernel Authenticode hashes; no kernel hash for systemd-stub v258+)
 - RTMR[2]: OS identity (UKI PE sections measured by systemd-stub)
 - RTMR[3]: runtime policy (CoCo initdata digest)
 
 Azure SEV-SNP:
 
-- PCR 4: boot chain (EFI boot action, UKI + kernel Authenticode hashes)
+- PCR 4: boot chain (EFI boot action, UKI + kernel Authenticode hashes; no kernel hash for systemd-stub v258+)
 - PCR 5: partition table (GPT, framed by the Exit Boot Services actions)
 - PCR 8: runtime policy (CoCo initdata digest)
 - PCR 9: command line and initrd, as the Linux EFI stub measures them

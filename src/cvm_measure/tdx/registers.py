@@ -35,6 +35,7 @@ from ..uki import (
     UKI_MEASURED_SECTIONS,
     UKI_PROFILE_SECTION,
     UKI_UNMEASURED_SECTION,
+    firmware_measures_kernel,
     measured_sections,
 )
 from .baseline import Baseline
@@ -271,7 +272,7 @@ def _compute_rtmr1(
 ) -> str:
     """Compute RTMR[1] from UKI + baseline.
 
-    Event order (7 total):
+    Event order (7 total, 6 for systemd-stub v258+):
       1. "Calling EFI Application from Boot Option"  (computed constant)
       2. Separator                                     (computed constant)
       3. GPT hash                                      (disk image, or baseline fallback)
@@ -280,10 +281,12 @@ def _compute_rtmr1(
       6. "Exit Boot Services Invocation"               (computed constant)
       7. "Exit Boot Services Returned with Success"    (computed constant)
 
-    Event 5 is the kernel systemd-stub loads out of the UKI's .linux section,
-    which firmware measures as a second boot application. A UKI without that
-    section boots some other way and produces a different event sequence, so
-    it is rejected rather than measured as if it were its own kernel.
+    Event 5 is the kernel systemd-stub loads out of the UKI's .linux section.
+    Stubs before v258 load it through firmware LoadImage(), which measures it
+    as a second boot application; v258+ starts it directly, so there is no
+    event 5. A UKI without a .linux section boots some other way and produces
+    a different event sequence, so it is rejected rather than measured as if
+    it were its own kernel.
     """
     if gpt_digest_hex is not None:
         gpt_digest = _digest_from_hex(gpt_digest_hex, "GPT digest")
@@ -307,14 +310,15 @@ def _compute_rtmr1(
             "firmware to measure as the second boot application. RTMR[1] for a "
             "boot chain like that is not something this tool can reconstruct."
         )
-    kernel_auth = pe_authenticode_digest(kernel_data, "sha384")
+    boot_applications = [uki_auth]
+    if firmware_measures_kernel(uki, secure_boot=baseline.secureboot_enabled):
+        boot_applications.append(pe_authenticode_digest(kernel_data, "sha384"))
 
     digests = [
         EFI_ACTION_DIGESTS["Calling EFI Application from Boot Option"],
         SEPARATOR_DIGEST,
         gpt_digest,
-        uki_auth,
-        kernel_auth,
+        *boot_applications,
         EFI_ACTION_DIGESTS["Exit Boot Services Invocation"],
         EFI_ACTION_DIGESTS["Exit Boot Services Returned with Success"],
     ]

@@ -50,7 +50,7 @@ from pathlib import Path
 
 from ..initdata import compute_digest
 from ..tdx.pe import pe_authenticode_digest, pe_extract_section
-from ..uki import measured_sections
+from ..uki import firmware_measures_kernel, measured_sections
 
 SHA256_SIZE = 32
 
@@ -161,7 +161,7 @@ def digest_from_hex(value: str, what: str) -> bytes:
 def _compute_pcr4(uki: bytes) -> str:
     """Compute PCR 4, the boot chain, from the UKI.
 
-    Event order (4 total):
+    Event order (4 total, 3 for systemd-stub v258+):
       1. EV_EFI_ACTION   "Calling EFI Application from Boot Option"
       2. EV_SEPARATOR    SHA-256(0u32)
       3. EV_EFI_BOOT_SERVICES_APPLICATION  Authenticode over the whole UKI
@@ -173,10 +173,12 @@ def _compute_pcr4(uki: bytes) -> str:
     .rodata, .data or the PE headers, so a swapped stub with identical
     payloads moves PCR 4 and nothing else.
 
-    Event 4 is the kernel systemd-stub loads out of .linux, which firmware
-    measures as a second boot application. A UKI without that section boots
-    some other way and produces a different event sequence, so it is
-    rejected rather than measured as if it were its own kernel.
+    Event 4 is the kernel systemd-stub loads out of .linux. Stubs before v258
+    load it through firmware LoadImage(), which measures it as a second boot
+    application; v258+ starts it directly, so there is no event 4. A UKI
+    without a .linux section boots some other way and produces a different
+    event sequence, so it is rejected rather than measured as if it were its
+    own kernel.
     """
     kernel = pe_extract_section(uki, ".linux", use_virtual_size=True)
     if kernel is None:
@@ -186,14 +188,14 @@ def _compute_pcr4(uki: bytes) -> str:
             "boot chain like that is not something this tool can reconstruct."
         )
 
-    return replay_digests(
-        [
-            EFI_ACTION_DIGESTS["Calling EFI Application from Boot Option"],
-            SEPARATOR_DIGEST,
-            pe_authenticode_digest(uki, "sha256"),
-            pe_authenticode_digest(kernel, "sha256"),
-        ]
-    ).hex()
+    digests = [
+        EFI_ACTION_DIGESTS["Calling EFI Application from Boot Option"],
+        SEPARATOR_DIGEST,
+        pe_authenticode_digest(uki, "sha256"),
+    ]
+    if firmware_measures_kernel(uki):
+        digests.append(pe_authenticode_digest(kernel, "sha256"))
+    return replay_digests(digests).hex()
 
 
 def _compute_pcr5(gpt_event_data: bytes) -> str:

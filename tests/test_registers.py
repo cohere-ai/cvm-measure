@@ -33,7 +33,7 @@ from cvm_measure.tdx.registers import (
 )
 from cvm_measure.tdx.rtmr import SHA384_SIZE, replay_digests
 
-from .test_pe import build_pe
+from .test_pe import build_pe, stub_magic
 
 
 class TestConstants:
@@ -517,3 +517,101 @@ class TestComputeAll:
             firmware_a3, uki_a3, baseline_a3, ram_gib=234, rtmr3_hex=custom
         )
         assert regs.rtmr3 == custom
+
+
+# RTMR[1] event digests read out of the CCEL of two GCP c3-standard-4 TDX
+# boots of the same PodVM image, one built with systemd-stub 256.5 and one with
+# 259.5. Their UKI and GPT digests differ because the images differ; the inner
+# kernel is the same file. Firmware logged the kernel for v256 and not for v259.
+_CCEL_STUB256_RTMR1 = [
+    "77a0dab2312b4e1e57a84d865a21e5b2ee8d677a21012ada819d0a98988078d3d740f6346bfe0abaa938ca20439a8d71",
+    "394341b7182cd227c5c6b07ef8000cdfd86136c4292b8e576573ad7ed9ae41019f5818b4b971c9effc60e1ad9f1289f0",
+    "b02c9272c2faa42ec3bd9b1f9dd4fac5ca662bbcd48951db64f50ffdae42927d6c4ea00baf37e81f173be93bc27a3d60",
+    "5f2f6aa33cd0283a102aee22e65abe1e4ca337462d00cc776b56bb56e1998c1f99abf6889d795c9ffa98166f449bd216",
+    "19fc2880c1a79028127ca0b8bcebcfc9c1f0245dcbacea6fb83d2ac777ebe5ae4376f5f3b2e03f569df24cfa5d26c822",
+    "214b0bef1379756011344877743fdc2a5382bac6e70362d624ccf3f654407c1b4badf7d8f9295dd3dabdef65b27677e0",
+    "0a2e01c85deae718a530ad8c6d20a84009babe6c8989269e950d8cf440c6e997695e64d455c4174a652cd080f6230b74",
+]
+_CCEL_STUB256_RTMR1_VALUE = "b6930ca0f87c3ea2fc27e55443e3c00140684a7668c424eb9e884767ecc5ff76417a2e9ef3f81994a0d0b0897b7e55a3"
+_CCEL_STUB259_RTMR1 = [
+    "77a0dab2312b4e1e57a84d865a21e5b2ee8d677a21012ada819d0a98988078d3d740f6346bfe0abaa938ca20439a8d71",
+    "394341b7182cd227c5c6b07ef8000cdfd86136c4292b8e576573ad7ed9ae41019f5818b4b971c9effc60e1ad9f1289f0",
+    "34402e0a8de839da579889204461b7f1edbd2bbec24aa1ca8039e7069cbd99a64bb1c726a9fe9fe32ab04b2ab30e0992",
+    "1ff5e53a4cc1b0bb4bd7b5a90a884e29735be2db19c43adc36274c1bd93b496b020d822e31574265c79834fc009794bb",
+    "214b0bef1379756011344877743fdc2a5382bac6e70362d624ccf3f654407c1b4badf7d8f9295dd3dabdef65b27677e0",
+    "0a2e01c85deae718a530ad8c6d20a84009babe6c8989269e950d8cf440c6e997695e64d455c4174a652cd080f6230b74",
+]
+_CCEL_STUB259_RTMR1_VALUE = "1e5b26e03ed853c4d27c4cedd02cbd66434c5de382c79f82c1cfaf4c0085c15597a6be0514711d108c389228540ccfe6"
+
+
+class TestRTMR1StubVersions:
+    """systemd-stub v258 stopped loading the kernel through firmware."""
+
+    @staticmethod
+    def _uki(stub_major: int) -> bytes:
+        kernel = build_pe([(".text", 16, 16, b"kernel-payload!!")])
+        sections = [
+            (".text", 9, 512, b"stub-code"),
+            (".sdmagic", 48, 512, stub_magic(stub_major)),
+            (".osrel", 8, 512, b"ID=test\n"),
+            (".linux", len(kernel), len(kernel), kernel),
+        ]
+        return build_pe(sections)
+
+    def _expected(self, uki: bytes, gpt: bytes, with_kernel: bool) -> str:
+        from cvm_measure.tdx.pe import pe_authenticode_digest, pe_extract_section
+
+        apps = [pe_authenticode_digest(uki, "sha384")]
+        if with_kernel:
+            kernel = pe_extract_section(uki, ".linux", use_virtual_size=True)
+            assert kernel is not None
+            apps.append(pe_authenticode_digest(kernel, "sha384"))
+        return replay_digests([
+            EFI_ACTION_DIGESTS["Calling EFI Application from Boot Option"],
+            SEPARATOR_DIGEST,
+            gpt,
+            *apps,
+            EFI_ACTION_DIGESTS["Exit Boot Services Invocation"],
+            EFI_ACTION_DIGESTS["Exit Boot Services Returned with Success"],
+        ]).hex()
+
+    @pytest.mark.parametrize(
+        ("stub_major", "with_kernel"), [(255, True), (256, True), (257, True), (258, False), (259, False)]
+    )
+    def test_kernel_event_depends_on_stub_version(
+        self, baseline_a3, stub_major: int, with_kernel: bool
+    ) -> None:
+        uki = self._uki(stub_major)
+        gpt = hashlib.sha384(b"gpt").digest()
+        assert _compute_rtmr1(uki, baseline_a3, gpt.hex()) == self._expected(
+            uki, gpt, with_kernel
+        )
+
+    def test_refuses_a_uki_without_a_stub_version(self, baseline_a3) -> None:
+        kernel = build_pe([(".text", 16, 16, b"kernel-payload!!")])
+        uki = build_pe([(".linux", len(kernel), len(kernel), kernel)])
+        with pytest.raises(ValueError, match="sdmagic"):
+            _compute_rtmr1(uki, baseline_a3, "00" * 48)
+
+    def test_refuses_v258_with_secure_boot(self, baseline_a3) -> None:
+        baseline_a3.secureboot_enabled = True
+        with pytest.raises(ValueError, match="shim"):
+            _compute_rtmr1(self._uki(259), baseline_a3, "00" * 48)
+
+    @pytest.mark.parametrize(
+        ("events", "value"),
+        [
+            (_CCEL_STUB256_RTMR1, _CCEL_STUB256_RTMR1_VALUE),
+            (_CCEL_STUB259_RTMR1, _CCEL_STUB259_RTMR1_VALUE),
+        ],
+    )
+    def test_hardware_sequences_fold_to_their_quotes(self, events, value) -> None:
+        assert replay_digests([bytes.fromhex(d) for d in events]).hex() == value
+
+    def test_hardware_logs_differ_only_by_the_kernel_event(self) -> None:
+        """Same constants in the same slots; v259 has no kernel image event."""
+        fixed = [0, 1, -2, -1]
+        assert [_CCEL_STUB256_RTMR1[i] for i in fixed] == [
+            _CCEL_STUB259_RTMR1[i] for i in fixed
+        ]
+        assert len(_CCEL_STUB256_RTMR1) == len(_CCEL_STUB259_RTMR1) + 1
