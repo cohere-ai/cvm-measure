@@ -35,17 +35,17 @@ Issues = "https://github.com/cohere-ai/cvm-measure/issues"
 [project.optional-dependencies]
 # Pinned so a new upstream release cannot change lint/type results in CI.
 dev = [
-    "pytest==9.1.1",
+    "pytest==9.2.0",
     "pytest-cov==7.1.0",
-    "mypy==2.3.0",
-    "ruff==0.16.2",
+    "mypy==2.4.0",
+    "ruff==0.17.3",
 ]
 security = [
     "bandit==1.9.4",
     "pip-audit==2.10.1",
 ]
 release = [
-    "build==1.5.0",
+    "build==1.6.1",
     "twine==7.0.0",
 ]
 
