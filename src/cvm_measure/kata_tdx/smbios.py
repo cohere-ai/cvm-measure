@@ -51,9 +51,11 @@ def qemu_tables(
     memory_device_size: int = 2 * TIB,
 ) -> bytes:
     """smbios_get_tables_ep for a q35 machine with ``-smp N`` (one socket, N cores)."""
-    if vcpus > 0xFF:
+    # 255 cores already encodes as 0xFF ("see Core Count 2"), which SMBIOS 2.x
+    # cannot carry, so QEMU's auto entry point switches to SMBIOS 3.0.
+    if vcpus >= 0xFF:
         raise NotImplementedError(
-            "more than 255 cores per socket needs the SMBIOS 3.0 entry point"
+            "255 or more cores per socket use the SMBIOS 3.0 entry point"
         )
     out = [
         _record(

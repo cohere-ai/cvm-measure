@@ -139,6 +139,19 @@ def test_smbios_handoff_digest(shape: dict[str, Any], platform: Platform) -> Non
     assert smbios.handoff_digest(tables).hex() == shape["events"]["smbios"]
 
 
+@pytest.mark.parametrize("vcpus", [255, 256])
+def test_smbios_30_entry_point_unmodelled(vcpus: int, platform: Platform) -> None:
+    with pytest.raises(NotImplementedError, match="SMBIOS 3.0"):
+        smbios.qemu_tables(
+            machine="pc-q35-11.0",
+            vcpus=vcpus,
+            ram_bytes=8 << 30,
+            e820_ram=tdhob.q35_e820_ram(8 << 30),
+            cpuid_1_eax=platform.cpuid_1_eax,
+            cpuid_1_edx=platform.cpuid_1_edx,
+        )
+
+
 @pytest.mark.parametrize("shape", SHAPES, ids=_shape_id)
 def test_hole64(shape: dict[str, Any], platform: Platform) -> None:
     bits = pcialloc.ovmf_phys_bits(platform.phys_bits, platform.guest_phys_bits)
