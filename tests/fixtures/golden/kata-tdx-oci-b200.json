@@ -1,5 +1,5 @@
 {
-  "_comment": "Kata 4.4.0 (kata-static-4.4.0-amd64 with the nvidia-gpu kernel and rootfs images) on oke-us-phx-1-cc-prod, runtime-rs configuration-qemu-nvidia-gpu-tdx-runtime-rs.toml plus fixtures/kata-tdx/config.d. Registers come from Trustee claims of pods with one, two and four B200s; events are single digests from the same boots, so each input is pinned and not only the folded register. vcpus and memory_mib are what Kata passed QEMU.",
+  "_comment": "Kata 4.4.0 (kata-static-4.4.0-amd64 with the nvidia-gpu kernel and rootfs images) on oke-us-phx-1-cc-prod, runtime-rs configuration-qemu-nvidia-gpu-tdx-runtime-rs.toml plus fixtures/kata-tdx/config.d. Registers come from Trustee claims of pods with one, two and four B200s, from the CCEL of a small one-GPU probe pod (3 vCPUs, 4.5 GiB), and from the TD quotes and CCELs of seven probe pods sized to cover 0 to 4 GPUs, 2 to 151 vCPUs and 2.5 GiB to 2 TiB, with vcpus and memory_mib read from each guest's SMBIOS tables; events are single digests from the same boots, so each input is pinned and not only the folded register. vcpus and memory_mib are what Kata passed QEMU.",
   "platform": "oci-bm-gpu-b200-emr",
   "artifacts_sha384": {
     "opt/kata/share/ovmf/OVMF.inteltdx.fd": "795ae36b475559b7a70cc8ae679e7f4e0e910949f0eea6030bf62d1f13a906556ea038b15186316d930624474788b1a4",
@@ -12,6 +12,45 @@
   "rtmr1": "d6b43e3da19a03637083812da38d29c04b6342173f326c29e83d234b7ae860f889a7c9b576063f50b98a60470e0b8c0c",
   "rtmr2": "eda3f12f8d6eb8e6805c0de09078e0a124f3a44f2672a3029b925b10add26aaef9286813111f65b36ee0659ed63032ee",
   "shapes": [
+    {
+      "gpus": 0,
+      "vcpus": 2,
+      "memory_mib": 4608,
+      "rtmr0": "76a2028dac1e964abc800c91a7f5475a8fabc966b09c1f558be8712acecd62e9e25ef0d1f57615dcc6aa2d48d07b7dd0",
+      "events": {
+        "tdx_table": "3612635533f45ab63105dc0f286e0b4e08ee521fd8b9e5d9376b2574103a9a07e5aa466d5d6ef00047bd043ebfdce881",
+        "table_loader": "7a216b964757bf770faacc69cefe4e8e8bcc9da3e7d6ae1039c2ca1469181a317f7ca5bbe617f28f1292e5675627b76e",
+        "rsdp": "0d59628442ea7ccaf7dd5e62af657d055c13adcedf6cc6d513e8d6eed2e4c7437b5f9e353d514273596bd664739e6b14",
+        "acpi_tables": "6bb44d610d2c8d4f15e9de815850ac07bf64ff079342ce72614997d95265e02bed15bd38463e934e82eb764f9dd27f64",
+        "smbios": "185861eb6e4949a0143b5a728bbf1770881bb59cbb037317425d843354f1def3deab903cec42b8e93178360fe0b8f383"
+      }
+    },
+    {
+      "gpus": 1,
+      "vcpus": 2,
+      "memory_mib": 2560,
+      "rtmr0": "2278c12b03874caf83ffb0a70a4882bbafa6ea5ac0a24125f06e44f4e708b919080767f17f0b06f6f8f7e45d295bcec5",
+      "events": {
+        "tdx_table": "e05c12e2a65d57b3ff1f70abd2ae689c7e9096558dc28122befbcecad4a9d6d4569652e5c0298ee381bee5febeecbaa6",
+        "table_loader": "fb8d92a6f1da04213624a398c9600b2e80b288cde068fe77494c8f1030ed8e341c1ca1257cf22cdee1b15ba83c9b8bbb",
+        "rsdp": "ef800330a3a62c199d70f400d7d8ac883ac0049a133fe0dc2d529596d80a35d87a42dcc9f7f7a24fcdecd80285f554bb",
+        "acpi_tables": "0bb9a8a62069ccd5416670a4334c0501f96e075d6de61a18bd0ddb00cc745cc8b2f6d71f78d327615d14b05aa063cdb2",
+        "smbios": "222dbc54d86e4eee0220c0f8e4c42cfd4cf0d2178093e3af6c519baebdc2f42de9bcd25b52983edacf27e0b117a7d203"
+      }
+    },
+    {
+      "gpus": 1,
+      "vcpus": 3,
+      "memory_mib": 4608,
+      "rtmr0": "1048f2c27cc96867d0e9fffc0ece502483cde776ce7656b06233bd8574dbf050b3cefd412ac2a272a09c72ecf1d6b20f",
+      "events": {
+        "tdx_table": "3612635533f45ab63105dc0f286e0b4e08ee521fd8b9e5d9376b2574103a9a07e5aa466d5d6ef00047bd043ebfdce881",
+        "table_loader": "f9cd770feedf413a588279e7a2ef5c07cd41b14015d19ae42b7523cb782bc0d316766db85ec2cf208072493dc9a87d83",
+        "rsdp": "4138edf31dc284042397ceaace9e669be84679d2882b81660bc1cc8e460620ae2bcabfad3c621fa6f50a162f79389554",
+        "acpi_tables": "f956b29e3b3f6d3b4c439dafac8c19bb889f4005883a31aa5d67e4bbf8efd90d61f347e9f75d77dc5136ab7c26fa7766",
+        "smbios": "185861eb6e4949a0143b5a728bbf1770881bb59cbb037317425d843354f1def3deab903cec42b8e93178360fe0b8f383"
+      }
+    },
     {
       "gpus": 1,
       "vcpus": 27,
@@ -26,6 +65,45 @@
       }
     },
     {
+      "gpus": 1,
+      "vcpus": 64,
+      "memory_mib": 8706,
+      "rtmr0": "bc6cb362945a0b639a419cfe495bbf6158b58fee7ac4f2f88bd06aa3773300c182fdfc75d90e54fac5e2a0be86da00ac",
+      "events": {
+        "tdx_table": "88c0a919e96962572e660cbdd887426596eaac2b437a7e9b7685f8f299a5330b465af4424e099c44fc528b7dd53b0616",
+        "table_loader": "758bfb2a60d69ea5533c46dac3108d70c38b6ca6a4371627f069735fe15c4d0f6457b701e4536c68eef1e2f0e248a3c3",
+        "rsdp": "4a9b15bbbc1c2825a037e44c5ce60a35322891e0b8c5ecb4db2239babf78a6048e7fa899bb7fad162fade87b3965cc8f",
+        "acpi_tables": "5248c411055cc687cf88475757e9bea88a07d9190ff9200eedcb25c4ca535e2982ab2348e5360a7d7a16431572024f7f",
+        "smbios": "17eb4a955d3234d8a255d0427121f3da1d3240cd163f3fe4716d7a668d60d575fba1c9b0eec0dfe39ca1ea04b797c4d8"
+      }
+    },
+    {
+      "gpus": 1,
+      "vcpus": 151,
+      "memory_mib": 16896,
+      "rtmr0": "98ec52e7f59b3a877fc105b07f2392c9ac68a69131b5de9591594ca2180ba12cad45ebdc5b22c0a3a946a57e60ed9b1c",
+      "events": {
+        "tdx_table": "13ae9222cfec104c0a9776b335d8604257cae82eb28269d03f2ee037fb35411acd271d681f6796962ecf27a517019b61",
+        "table_loader": "1f2e677c333ee1aa7006996cb361126b5fe55ce09ecc9936d837070c876384496fa32673e021ba3078f1eef3ec47ec30",
+        "rsdp": "115de4865bf671a8e13a6d042870f52b4b700a5f8f83a114555ed41c6ebd97cd8048c5d9fe265b754d908380dfe3c0ff",
+        "acpi_tables": "ea64188ec3fcf4b3075d84fa9b7d7e6cdf11afc47ad1c1e58ede5bd27506f25e31eec3496c7f44220a2f0bf05a46375c",
+        "smbios": "10c5affc364f8e09f6b26a6857d1e7c905964c3fd76959d7444190c1659fd287f5aa333b551c48eb8f5099ab1a88dd4b"
+      }
+    },
+    {
+      "gpus": 2,
+      "vcpus": 8,
+      "memory_mib": 2812,
+      "rtmr0": "ca25ddb742fab26e6875aa5ba823f4dd12ae2f9305cb6a2adb7e758a57501b657e5a0785864a1f201c20a2b567cd92fd",
+      "events": {
+        "tdx_table": "ac9e6333290ed06f11b23a1966798c012518eea101e14b09eb50d6fee6225bba3eff12ce8c7c33a0f5020793de6ab692",
+        "table_loader": "a56667ebca6b31658228fddb58b2c1174720af65ac04318a351aa8189a01e28f8ed9889a5706652044338bcff1c186a2",
+        "rsdp": "a6bc9333c700789b2a9c26073f967ef132960eced2b14f200ba7b033943d5847dfc382c40dab225d1857116d16183b19",
+        "acpi_tables": "72cc806567e2a800dbd2c5827f14887312f2b83ca30dff677d92e4b308538d1437360a78981145c46f2e289285ee91c8",
+        "smbios": "142c4122162e3d383ed0ae4351624745a51faa5d7aa13f96125a52ddde181d53c964314947abf6457044e738bf8105c0"
+      }
+    },
+    {
       "gpus": 2,
       "vcpus": 51,
       "memory_mib": 789248,
@@ -36,6 +114,32 @@
         "rsdp": "8566f1f3709c7432224c4181ed4bb2e46abf3c0913cf0b29089030d057bed3b4b93d254c602c86dc69882e96e69f55cd",
         "acpi_tables": "00df0dd379e3940bc7126fdc970183d3aeb1737183a44307a76ff99c01676ac0b417c019cebf8ae7350154bd538145e9",
         "smbios": "aae16c096085538bbfb731ff5a5b8a71f27540b996ad041b2e09d9728062abf459e9eec7d59da5e18927f3d7e88bb53e"
+      }
+    },
+    {
+      "gpus": 4,
+      "vcpus": 4,
+      "memory_mib": 4608,
+      "rtmr0": "3d055860a0eee63a6fd321225a092c83c37e8c17406c743fa1ef0883da1de5d6de7f4306051864ce94f15c22ce1b21a0",
+      "events": {
+        "tdx_table": "3612635533f45ab63105dc0f286e0b4e08ee521fd8b9e5d9376b2574103a9a07e5aa466d5d6ef00047bd043ebfdce881",
+        "table_loader": "9fbfbf60df85f70bcb6078ea6215be824a1518a391f101739a5f80fa2a2bff18557e4af8f60cd895ca0b3ef74268fe59",
+        "rsdp": "eb202f7534382645473bbf4b260fb71c25e2a9370b6b9b7f9c994746158e8c9efb2c3de4d414e9a4430fd281f4cb626a",
+        "acpi_tables": "cc7d21544006b03ff295b416b1838cabd7bfb5c89915ff463cdc8776e531f85e810d5a69929f8dfd2f3931aba20dfd38",
+        "smbios": "185861eb6e4949a0143b5a728bbf1770881bb59cbb037317425d843354f1def3deab903cec42b8e93178360fe0b8f383"
+      }
+    },
+    {
+      "gpus": 4,
+      "vcpus": 16,
+      "memory_mib": 2097664,
+      "rtmr0": "b7a59fbf6b45a53029faa13021a384296af414f5c0528e2ec2ef57c42a9c8efc71cb130812e9437bbdf57e75449296f1",
+      "events": {
+        "tdx_table": "b8bc5677b1b6d88388e5e01e226258d324560bd98924ff3ea3c4dbbf9943bbdcf66961ff556c6fc0a0e308918ba8379b",
+        "table_loader": "07e19de8c1965e6c7cec1e69d2b87e867b620459824d2a80375c05f3be85f5a3d292e6fdcfef8ab2846f0cb09a362547",
+        "rsdp": "95597ec6e99467c9ff9435097f87164bda019132b85fe0e826e9918491e653ab322e3e1ef7cd984c58995223013b1ee7",
+        "acpi_tables": "da649c25b47b6c7566b4d00a6fdb31353c7af56ca16978a978f0ecbafc79baf0e02867d539e4972e7e977cd8fa83c17e",
+        "smbios": "1780510da2158eba9c739f491426fdd51ebde94ba5e78a00164b503e2eb04dac0a031e33b8139861397e9e72addfc9df"
       }
     },
     {

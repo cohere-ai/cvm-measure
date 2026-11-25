@@ -43,7 +43,12 @@ PLATFORM = REPO / "platforms" / "oci-bm-gpu-b200-emr.json"
 GOLDEN = json.loads((FIXTURES_DIR / "golden" / "kata-tdx-oci-b200.json").read_text())
 SHAPES = GOLDEN["shapes"]
 RELEASE_CONFIG = "opt/kata/share/defaults/kata-containers/runtime-rs/configuration-qemu-nvidia-gpu-tdx-runtime-rs.toml"
-B200_HOLE64_END = {1: 0x3880_0002_0000, 2: 0x38F8_0002_0000, 4: 0x39E8_0002_0000}
+B200_HOLE64_END = {
+    0: 0x3840_0002_0000,
+    1: 0x3880_0002_0000,
+    2: 0x38F8_0002_0000,
+    4: 0x39E8_0002_0000,
+}
 
 needs_tomllib = pytest.mark.skipif(
     sys.version_info < (3, 11), reason="tomllib needs Python 3.11"
@@ -51,7 +56,7 @@ needs_tomllib = pytest.mark.skipif(
 
 
 def _shape_id(shape: dict[str, Any]) -> str:
-    return f"{shape['gpus']}gpu"
+    return f"{shape['gpus']}gpu-{shape['vcpus']}cpu"
 
 
 @pytest.fixture(scope="module")
@@ -304,6 +309,86 @@ def test_registers(
         "rtmr2": GOLDEN["rtmr2"],
         "rtmr3": "00" * 48,
     }
+
+
+RTMR0_EVENTS = (
+    "tdx_table",
+    "cfv",
+    "boot_menu",
+    "bootorder",
+    "SecureBoot",
+    "PK",
+    "KEK",
+    "db",
+    "dbx",
+    "separator",
+    "table_loader",
+    "rsdp",
+    "acpi_tables",
+    "smbios",
+    "BootOrder",
+    "Boot0000",
+)
+ACPI_EVENTS = {"table_loader", "rsdp", "acpi_tables"}
+
+
+@pytest.mark.parametrize(
+    ("guest_change", "platform_change", "allowed", "required"),
+    [
+        # SmbiosMeasurementDxe blanks the type 4 core and thread counts.
+        ({"vcpus": 8}, {}, ACPI_EVENTS, {"acpi_tables"}),
+        (
+            {"memory_mib": 8192},
+            {},
+            ACPI_EVENTS | {"tdx_table", "smbios"},
+            {"tdx_table", "smbios"},
+        ),
+        # Crossing q35's 2.75 GiB rule moves the 32-bit PCI hole in the DSDT.
+        (
+            {"memory_mib": 2560},
+            {},
+            ACPI_EVENTS | {"tdx_table", "smbios"},
+            {"tdx_table", "smbios", "acpi_tables"},
+        ),
+        ({"gpus": 2}, {}, ACPI_EVENTS, {"acpi_tables"}),
+        ({}, {"cpuid_1_eax": 0xC06F3}, {"smbios"}, {"smbios"}),
+        (
+            {},
+            {"gpu_bars": (128 << 30, 64 << 20, 32 << 20)},
+            ACPI_EVENTS,
+            {"acpi_tables"},
+        ),
+    ],
+    ids=["vcpus", "memory", "lowmem-rule", "gpus", "cpuid", "gpu-bars"],
+)
+def test_input_changes_only_its_events(
+    guest_change: dict[str, int],
+    platform_change: dict[str, Any],
+    allowed: set[str],
+    required: set[str],
+    kata_config: Path,
+    kata_root: Path,
+    platform: Platform,
+) -> None:
+    from dataclasses import replace
+
+    from cvm_measure.kata_tdx.config import load_config
+    from cvm_measure.kata_tdx.registers import Guest, rtmr0_digests
+
+    cfg = load_config(kata_config, root=kata_root)
+    firmware, qemu = (Path(p).read_bytes() for p in (cfg.firmware, cfg.qemu))
+    base = Guest(vcpus=3, memory_mib=4608, gpus=1)
+    before = rtmr0_digests(cfg, platform, base, firmware, qemu)
+    after = rtmr0_digests(
+        cfg,
+        replace(platform, **platform_change),
+        replace(base, **guest_change),
+        firmware,
+        qemu,
+    )
+    assert len(before) == len(after) == len(RTMR0_EVENTS)
+    changed = {n for n, a, b in zip(RTMR0_EVENTS, before, after) if a != b}
+    assert required <= changed <= allowed
 
 
 def test_cli(
