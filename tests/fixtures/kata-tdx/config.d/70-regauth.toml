@@ -1,0 +1,2 @@
+[agent.kata]
+image_registry_auth_file = "/etc/kata-containers/registry-auth.json"

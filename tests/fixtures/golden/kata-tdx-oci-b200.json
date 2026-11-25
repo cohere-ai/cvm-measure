@@ -1,0 +1,55 @@
+{
+  "_comment": "Kata 4.4.0 (kata-static-4.4.0-amd64 with the nvidia-gpu kernel and rootfs images) on oke-us-phx-1-cc-prod, runtime-rs configuration-qemu-nvidia-gpu-tdx-runtime-rs.toml plus fixtures/kata-tdx/config.d. Registers come from Trustee claims of pods with one, two and four B200s; events are single digests from the same boots, so each input is pinned and not only the folded register. vcpus and memory_mib are what Kata passed QEMU.",
+  "platform": "oci-bm-gpu-b200-emr",
+  "artifacts_sha384": {
+    "opt/kata/share/ovmf/OVMF.inteltdx.fd": "795ae36b475559b7a70cc8ae679e7f4e0e910949f0eea6030bf62d1f13a906556ea038b15186316d930624474788b1a4",
+    "opt/kata/share/kata-containers/vmlinuz-6.18.62-211-nvidia-gpu": "f2f88fc3003a72d56d3c2a15513f089eaa18dae6ba4ee090010fde46ebd11ae6ab23f21f56d471f0eded4d0df465ff20",
+    "opt/kata/bin/qemu-system-x86_64-tdx-experimental": "e2583c6a7a3b88fb8cfaf607981c6fb8a7e573100132a1274bcfda982575da09e5c38e2b3febf16317fc9ca9bb34298e"
+  },
+  "initdata": "kata-tdx-allow-all-initdata.toml",
+  "mrtd": "382d7bb61e152a5cc6eb22922a4dc9d33025211e24ec199fe38d6233c39cd86bf633e3c4f6e62393cf7ce6da91069ca0",
+  "mrconfigid": "d37a36afcc78bf3158acdeba4f249e41e4ff517f85bc63b59016bc1379d1893df7967479bfe4b1328f2499b9a80fc272",
+  "rtmr1": "d6b43e3da19a03637083812da38d29c04b6342173f326c29e83d234b7ae860f889a7c9b576063f50b98a60470e0b8c0c",
+  "rtmr2": "eda3f12f8d6eb8e6805c0de09078e0a124f3a44f2672a3029b925b10add26aaef9286813111f65b36ee0659ed63032ee",
+  "shapes": [
+    {
+      "gpus": 1,
+      "vcpus": 27,
+      "memory_mib": 396032,
+      "rtmr0": "7ce154cfa9449ab67df5e42b1f84b02752ec2fd933e8f86b58ba82ad3ae2a1f124343ab877283fc0ff7c15cb292d26db",
+      "events": {
+        "tdx_table": "533c9341c2350af707c5c83b26b85a3810ab015c413b0ea3850374206947d3d9a8ff5efb689f845e0e4afe1580b0a44a",
+        "table_loader": "c3f488563b371cb700f76bb06251ad2dfddf09319c344b8dd7f335b4557193a5ce63737f34346f75c75e7b7cd271fab4",
+        "rsdp": "4b58d40f16307eed8f3381d1368175e14269df48e2dca32037edfb10d0a9b62d1e6b0ca627dc2498c7a1d255ef9d6096",
+        "acpi_tables": "b8288fb3ad335a65268efe9c9883784a0376ec8915333f00cf00b61a8450268588950a51ab2baf1f4b7e9f047e29d466",
+        "smbios": "cb8742a57edee7d7d0e6f14661ae7b67136cc87f60ed573aa2268373ec0cb774623bf90b61ff2c41419b321507591792"
+      }
+    },
+    {
+      "gpus": 2,
+      "vcpus": 51,
+      "memory_mib": 789248,
+      "rtmr0": "8611d57e832f9d5fd9332e5ac5e3cd60b8a824c8403758e54c02ec235e283eaef4825b02f6cc50cd3ecf07d02d89bddc",
+      "events": {
+        "tdx_table": "ded93d80262a1f0e097847fcd8aac2e5ed0491c6bd9064054450839ed22f95873d387e252dd57077a5f81f2f6d4da1a8",
+        "table_loader": "55122e2d252eca63351445f87c8ea466d6369ca16cf1e709099515edab0226a8c19516af23925dac21e52459cfc8a862",
+        "rsdp": "8566f1f3709c7432224c4181ed4bb2e46abf3c0913cf0b29089030d057bed3b4b93d254c602c86dc69882e96e69f55cd",
+        "acpi_tables": "00df0dd379e3940bc7126fdc970183d3aeb1737183a44307a76ff99c01676ac0b417c019cebf8ae7350154bd538145e9",
+        "smbios": "aae16c096085538bbfb731ff5a5b8a71f27540b996ad041b2e09d9728062abf459e9eec7d59da5e18927f3d7e88bb53e"
+      }
+    },
+    {
+      "gpus": 4,
+      "vcpus": 99,
+      "memory_mib": 1575680,
+      "rtmr0": "512912854c636cf59ee061bd3a0d92547cc4f758a8ef8ee56f1759a434b7a7f9a00fec02c15b13871eb6b1847088487a",
+      "events": {
+        "tdx_table": "3713fd3533d9af94b2dbce3ed9ddece7c36a21562863dd0b0e44c247cd39844a5e23067906ddfa5c9064f4b949fbc988",
+        "table_loader": "50add157784d5a71beaf47da57f613092179f4c53c1446e272483c9c8165b552689d698f0496525da287e01399f0a73e",
+        "rsdp": "610c8b1af929126e77fa8b43b917b061e66b9d26aadaf2ba33a0d45d72b0825e5995e5147b7cf97579f0864fd436ab96",
+        "acpi_tables": "f5e49300b569e10f1654ab9e33bbc2088f1b875dc56b8f46d8cbdc44cb11147bab619e9b6c976bd1a02d07a88561404f",
+        "smbios": "eabb88a19504422ede66b66db9a4a039794ca817c4af35842d4edb830dd51f7c46f6a38960c890e68780f18548d7e242"
+      }
+    }
+  ]
+}
