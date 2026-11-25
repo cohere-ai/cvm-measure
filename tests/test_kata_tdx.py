@@ -48,6 +48,7 @@ B200_HOLE64_END = {
     1: 0x3880_0002_0000,
     2: 0x38F8_0002_0000,
     4: 0x39E8_0002_0000,
+    8: 0x3BC0_0602_0000,
 }
 
 needs_tomllib = pytest.mark.skipif(
