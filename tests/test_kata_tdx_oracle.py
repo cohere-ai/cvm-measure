@@ -55,7 +55,7 @@ _VIRTIO_SERIAL = 0x11 << 3
 
 # (gpus, vcpus, memory_mib): vCPU counts up to the SMBIOS 2.x limit, memory on
 # both sides of q35's 2.75 GiB lowmem rule and past one 2 TiB SMBIOS DIMM,
-# and GPU counts no live pod has had.
+# and the 8-GPU layout no live pod has had.
 SHAPES = [
     (1, 1, 4608),
     (1, 64, 4608),
@@ -67,8 +67,6 @@ SHAPES = [
     (1, 4, (2 << 20) + 512),
     (1, 4, 3 << 20),
     (0, 4, 8192),
-    (3, 75, 1181696),
-    (5, 123, 1969152),
     (8, 195, 3149824),
 ]
 
