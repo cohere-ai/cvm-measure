@@ -21,6 +21,8 @@ Usage:
     cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type a3-highgpu-1g -o baseline.json
     cvm-measure tdx extract-baseline --ccel ccel.bin --machine-type a3-highgpu-1g --firmware-sha384 abc...def
     cvm-measure tdx replay --ccel ccel.bin
+    cvm-measure kata-tdx --config configuration-qemu-nvidia-gpu-tdx-runtime-rs.toml --root kata-static \
+        --platform platforms/oci-bm-gpu-b200-emr.json --vcpus 27 --memory-mib 396032 --gpus 1 --initdata initdata.toml
     cvm-measure azure-snp --disk disk.raw
     cvm-measure azure-snp --disk disk.raw --initdata initdata.toml --output-format json
     cvm-measure azure-snp replay --eventlog binary_bios_measurements.bin
@@ -43,7 +45,9 @@ def main(argv: list[str] | None = None) -> None:
         prog="cvm-measure",
         description="Compute expected confidential VM register values from published inputs.",
     )
-    parser.add_argument("--version", action="version", version=f"cvm-measure {__version__}")
+    parser.add_argument(
+        "--version", action="version", version=f"cvm-measure {__version__}"
+    )
 
     sub = parser.add_subparsers(dest="subcommand", help="Subcommand")
 
@@ -52,8 +56,12 @@ def main(argv: list[str] | None = None) -> None:
         "extract-uki",
         help="Extract UKI (BOOTX64.EFI) from a pod VM disk image",
     )
-    uki_parser.add_argument("--disk", required=True, type=Path, help="Path to disk image (.raw or .tar.gz)")
-    uki_parser.add_argument("--output", "-o", required=True, type=Path, help="Output path for extracted UKI")
+    uki_parser.add_argument(
+        "--disk", required=True, type=Path, help="Path to disk image (.raw or .tar.gz)"
+    )
+    uki_parser.add_argument(
+        "--output", "-o", required=True, type=Path, help="Output path for extracted UKI"
+    )
     uki_parser.add_argument(
         "--max-extract-bytes",
         type=int,
@@ -76,19 +84,50 @@ def main(argv: list[str] | None = None) -> None:
         "extract-baseline",
         help="Extract baseline from a CCEL binary",
     )
-    eb_parser.add_argument("--ccel", required=True, type=Path, help="Path to CCEL binary")
-    eb_parser.add_argument("--machine-type", required=True, help="Machine type label (e.g. a3-highgpu-1g)")
-    eb_parser.add_argument("--firmware-sha384", type=str, default=None, help="SHA-384 of OVMF firmware binary (set in baseline if provided)")
-    eb_parser.add_argument("--provider", type=str, default=None, help="Cloud provider (auto-detected from machine type if omitted)")
-    eb_parser.add_argument("--platform", type=str, default=None, help="TEE platform (auto-set to 'tdx' if omitted)")
-    eb_parser.add_argument("-o", "--output", type=Path, default=None, help="Output JSON path (default: stdout)")
+    eb_parser.add_argument(
+        "--ccel", required=True, type=Path, help="Path to CCEL binary"
+    )
+    eb_parser.add_argument(
+        "--machine-type", required=True, help="Machine type label (e.g. a3-highgpu-1g)"
+    )
+    eb_parser.add_argument(
+        "--firmware-sha384",
+        type=str,
+        default=None,
+        help="SHA-384 of OVMF firmware binary (set in baseline if provided)",
+    )
+    eb_parser.add_argument(
+        "--provider",
+        type=str,
+        default=None,
+        help="Cloud provider (auto-detected from machine type if omitted)",
+    )
+    eb_parser.add_argument(
+        "--platform",
+        type=str,
+        default=None,
+        help="TEE platform (auto-set to 'tdx' if omitted)",
+    )
+    eb_parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="Output JSON path (default: stdout)",
+    )
 
     # -- tdx replay ------------------------------------------------------------
     rp_parser = tdx_sub.add_parser(
         "replay",
         help="Replay a CCEL event log to compute RTMR values",
     )
-    rp_parser.add_argument("--ccel", required=True, type=Path, help="Path to CCEL binary")
+    rp_parser.add_argument(
+        "--ccel", required=True, type=Path, help="Path to CCEL binary"
+    )
+
+    # -- kata-tdx --------------------------------------------------------------
+    kata_parser = sub.add_parser("kata-tdx", help="Kata Containers pod VM on Intel TDX")
+    _add_kata_tdx_args(kata_parser)
 
     # -- azure-snp -------------------------------------------------------------
     azure_parser = sub.add_parser("azure-snp", help="Azure SEV-SNP vTPM measurement")
@@ -124,6 +163,8 @@ def main(argv: list[str] | None = None) -> None:
             _cmd_replay(args)
         else:
             _cmd_compute(args, tdx_parser)
+    elif args.subcommand == "kata-tdx":
+        _cmd_kata_tdx(args)
     elif args.subcommand == "azure-snp":
         if args.command == "replay":
             _cmd_azure_replay(args)
@@ -151,22 +192,114 @@ def _add_compute_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--baseline", type=Path, help="Path to baseline JSON")
     parser.add_argument("--ram", type=int, help="Total guest RAM in GiB")
-    parser.add_argument("--numa-nodes", type=int, default=1, help="Number of NUMA nodes (default: 1)")
-    parser.add_argument("--max-per-node", type=int, default=None, help="Max GiB per NUMA node (default: same as --ram)")
+    parser.add_argument(
+        "--numa-nodes", type=int, default=1, help="Number of NUMA nodes (default: 1)"
+    )
+    parser.add_argument(
+        "--max-per-node",
+        type=int,
+        default=None,
+        help="Max GiB per NUMA node (default: same as --ram)",
+    )
     parser.add_argument(
         "--mode",
         choices=["all", "mrtd"],
         default="all",
         help="What to compute: 'all' (default) or 'mrtd' only",
     )
-    parser.add_argument("--rtmr3", type=str, default=None, help="Pre-computed RTMR[3] hex (96 chars)")
-    parser.add_argument("--initdata", type=Path, default=None, help="Path to initdata TOML; computes RTMR[3] automatically (mutually exclusive with --rtmr3)")
+    parser.add_argument(
+        "--rtmr3", type=str, default=None, help="Pre-computed RTMR[3] hex (96 chars)"
+    )
+    parser.add_argument(
+        "--initdata",
+        type=Path,
+        default=None,
+        help="Path to initdata TOML; computes RTMR[3] automatically (mutually exclusive with --rtmr3)",
+    )
     parser.add_argument(
         "--output-format",
         choices=["text", "json"],
         default="text",
         help="Output format: 'text' (default) or 'json'",
     )
+
+
+def _add_kata_tdx_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--config",
+        required=True,
+        type=Path,
+        help="Kata runtime-rs configuration TOML; config.d/*.toml beside it is merged in name order",
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path("/"),
+        help="Directory the config's absolute artifact paths resolve under, e.g. an extracted kata-static tarball (default: /)",
+    )
+    parser.add_argument(
+        "--platform",
+        required=True,
+        type=Path,
+        help="Host platform JSON (see platforms/)",
+    )
+    parser.add_argument(
+        "--vcpus", required=True, type=int, help="vCPUs Kata gives QEMU (-smp)"
+    )
+    parser.add_argument(
+        "--memory-mib",
+        required=True,
+        type=int,
+        help="Memory Kata gives QEMU (-m), in MiB",
+    )
+    parser.add_argument(
+        "--gpus",
+        type=int,
+        default=0,
+        help="GPUs cold-plugged into the pod VM (default: 0)",
+    )
+    parser.add_argument(
+        "--initdata",
+        type=Path,
+        default=None,
+        help="Path to initdata TOML; MRCONFIGID is computed from it",
+    )
+    parser.add_argument(
+        "--qemu-wrapper",
+        default="",
+        help=(
+            "Command prefix that runs the config's linux/amd64 QEMU binary on other hosts, "
+            "e.g. 'docker run --rm -i --platform linux/amd64 -v /data/kata:/data/kata:ro ubuntu:24.04'; "
+            "the artifact paths must resolve to the same files inside it"
+        ),
+    )
+    parser.add_argument(
+        "--output-format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format: 'text' (default) or 'json'",
+    )
+
+
+def _cmd_kata_tdx(args: argparse.Namespace) -> None:
+    import shlex
+
+    from .kata_tdx.config import load_config
+    from .kata_tdx.platform import load_platform
+    from .kata_tdx.registers import Guest, compute
+
+    _require_file(args.config, "--config")
+    _require_file(args.platform, "--platform")
+    if args.initdata is not None:
+        _require_file(args.initdata, "--initdata")
+    regs = compute(
+        load_config(args.config, root=args.root),
+        load_platform(args.platform),
+        Guest(vcpus=args.vcpus, memory_mib=args.memory_mib, gpus=args.gpus),
+        initdata=args.initdata,
+        qemu_wrapper=shlex.split(args.qemu_wrapper),
+    )
+    _output_registers(regs.as_dict(), args.output_format)
 
 
 def _add_azure_compute_args(parser: argparse.ArgumentParser) -> None:
@@ -197,7 +330,9 @@ def _add_azure_compute_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Path to initdata TOML; PCR 8 is computed from it",
     )
-    pcr8.add_argument("--pcr8", type=str, default=None, help="Pre-computed PCR 8 hex (64 chars)")
+    pcr8.add_argument(
+        "--pcr8", type=str, default=None, help="Pre-computed PCR 8 hex (64 chars)"
+    )
     parser.add_argument(
         "--output-format",
         choices=["text", "json"],
@@ -206,7 +341,9 @@ def _add_azure_compute_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _resolve_rtmr3(args: argparse.Namespace, parser: argparse.ArgumentParser) -> str | None:
+def _resolve_rtmr3(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> str | None:
     """Resolve RTMR[3] from --initdata or --rtmr3 (mutually exclusive)."""
     if args.initdata is not None and args.rtmr3 is not None:
         parser.error("--initdata and --rtmr3 are mutually exclusive")
@@ -241,6 +378,7 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
 
     if args.mode == "mrtd":
         from .tdx import compute_mrtd
+
         result = compute_mrtd(
             firmware,
             ram_gib=args.ram,
@@ -251,9 +389,13 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
         return
 
     if args.uki is None:
-        parser.error("--uki is required for full computation (use --mode mrtd to compute MRTD only)")
+        parser.error(
+            "--uki is required for full computation (use --mode mrtd to compute MRTD only)"
+        )
     if args.baseline is None:
-        parser.error("--baseline is required for full computation (use --mode mrtd to compute MRTD only)")
+        parser.error(
+            "--baseline is required for full computation (use --mode mrtd to compute MRTD only)"
+        )
 
     rtmr3_hex = _resolve_rtmr3(args, parser)
 
@@ -268,6 +410,7 @@ def _cmd_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
     if args.disk is not None:
         _require_file(args.disk, "--disk")
         from .disk import compute_gpt_digest
+
         gpt_digest_hex = compute_gpt_digest(args.disk, args.max_extract_bytes).hex()
 
     regs = compute_all_registers(
@@ -301,7 +444,9 @@ def _load_uki(args: argparse.Namespace) -> bytes:
         return extracted.read_bytes()
 
 
-def _cmd_azure_compute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+def _cmd_azure_compute(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> None:
     if args.disk is None:
         parser.error("--disk is required")
     _require_file(args.disk, "--disk")
@@ -342,6 +487,7 @@ def _cmd_azure_replay(args: argparse.Namespace) -> None:
 def _output_registers(data: dict[str, str], fmt: str) -> None:
     if fmt == "json":
         import json
+
         print(json.dumps(data, indent=2))
     else:
         # Pad to the widest label so the values line up. Register names differ

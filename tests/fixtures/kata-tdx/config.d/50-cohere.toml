@@ -1,0 +1,14 @@
+[hypervisor.qemu]
+kernel_params = "cgroup_no_v1=all pci=realloc pci=nocrs pci=assign-busses nvrc.smi.srs=1 agent.guest_components_rest_api=all"
+kernel_verity_params = "root_hash=8db9846d4be9ef6c184962f34601b0a52091853a21da79df58b1af5f1003b801,salt=3b6ea1e3e5fa8f221afd916cfc2ac6a04ba94bc0e0317c843911b1cc53d71f1e,data_blocks=5632,data_block_size=4096,hash_block_size=4096"
+enable_annotations = ["^cc_init_data$"]
+
+[[hypervisor.qemu.guest_extension_images]]
+name = "gpu"
+path = "/opt/kata/share/kata-containers/kata-containers-nvidia-gpu-extension.img"
+verity_params = "root_hash=2dfc0e6ccacd6102568c3f0e94fb060674b1fe28fac6062beead7420cb690ce9,salt=632bfd92f08582a27a469383fea7fb2eb9461818644c53aaaa98e28aea55a42b,data_blocks=100352,data_block_size=4096,hash_block_size=4096"
+
+[[hypervisor.qemu.guest_extension_images]]
+name = "coco"
+path = "/opt/kata/share/kata-containers/kata-containers-coco-extension.img"
+verity_params = "root_hash=1c91ef075a201b9890a0e0ba043716ddd44a1d8e56fe9f75776dcef58e7aa595,salt=78fc9bd1f4270278d3339f52ac5bcbd58bd601968e2e72996caa0944a55930ac,data_blocks=32000,data_block_size=4096,hash_block_size=4096"

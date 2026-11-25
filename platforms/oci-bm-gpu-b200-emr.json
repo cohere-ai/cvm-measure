@@ -1,0 +1,9 @@
+{
+  "name": "oci-bm-gpu-b200-emr",
+  "_source": "OCI BM.GPU.B200 with Xeon Platinum 8592+ (Emerald Rapids). Read inside a Kata TD on oke-us-phx-1-cc-prod: CPUID leaf 1 from /proc/cpuinfo and the SMBIOS type 4 ProcessorId, the address width from /proc/cpuinfo ('52 bits physical'), and the BAR sizes from lspci -vv of a passed-through B200.",
+  "cpuid_1_eax": "0x000c06f2",
+  "cpuid_1_edx": "0x1fa9fbff",
+  "phys_bits": 52,
+  "guest_phys_bits": 0,
+  "gpu_bars": ["256GiB", "64MiB", "32MiB"]
+}
