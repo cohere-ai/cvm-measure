@@ -265,6 +265,15 @@ def _add_kata_tdx_args(parser: argparse.ArgumentParser) -> None:
         help="Path to initdata TOML; MRCONFIGID is computed from it",
     )
     parser.add_argument(
+        "--qemu-wrapper",
+        default="",
+        help=(
+            "Command prefix that runs the config's linux/amd64 QEMU binary on other hosts, "
+            "e.g. 'docker run --rm -i --platform linux/amd64 -v /data/kata:/data/kata:ro ubuntu:24.04'; "
+            "the artifact paths must resolve to the same files inside it"
+        ),
+    )
+    parser.add_argument(
         "--output-format",
         choices=["text", "json"],
         default="text",
@@ -273,6 +282,8 @@ def _add_kata_tdx_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _cmd_kata_tdx(args: argparse.Namespace) -> None:
+    import shlex
+
     from .kata_tdx.config import load_config
     from .kata_tdx.platform import load_platform
     from .kata_tdx.registers import Guest, compute
@@ -286,6 +297,7 @@ def _cmd_kata_tdx(args: argparse.Namespace) -> None:
         load_platform(args.platform),
         Guest(vcpus=args.vcpus, memory_mib=args.memory_mib, gpus=args.gpus),
         initdata=args.initdata,
+        qemu_wrapper=shlex.split(args.qemu_wrapper),
     )
     _output_registers(regs.as_dict(), args.output_format)
 

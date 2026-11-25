@@ -14,9 +14,9 @@
 
 """The SMBIOS table OVMF measures as EV_EFI_HANDOFF_TABLES.
 
-QEMU generates the structures (``hw/smbios/smbios.c``, default options, SMBIOS
-2.8 entry point). OVMF's SmbiosPlatformDxe installs them in order, adds its
-own type 0 when QEMU sent none, and SmbiosDxe appends an end-of-table record.
+QEMU's structures are its fw_cfg file etc/smbios/smbios-tables (see
+:mod:`qemu`). OVMF's SmbiosPlatformDxe installs them in order, adds its own
+type 0 when QEMU sent none, and SmbiosDxe appends an end-of-table record.
 SmbiosMeasurementDxe hashes the result after blanking the fields in its
 filter table.
 """
@@ -25,154 +25,25 @@ from __future__ import annotations
 
 import hashlib
 import struct
-from collections.abc import Sequence
-
-KIB, MIB, TIB = 1 << 10, 1 << 20, 1 << 40
-
-QEMU_MANUFACTURER = "QEMU"
-Q35_DESCRIPTION = "Standard PC (Q35 + ICH9, 2009)"
 
 
-def _record(rtype: int, handle: int, fmt: bytes, strings: Sequence[str] = ()) -> bytes:
-    head = struct.pack("<BBH", rtype, 4 + len(fmt), handle) + fmt
-    if not strings:
-        return head + b"\0\0"
-    return head + b"".join(s.encode() + b"\0" for s in strings) + b"\0"
-
-
-def qemu_tables(
-    *,
-    machine: str,
-    vcpus: int,
-    ram_bytes: int,
-    e820_ram: Sequence[tuple[int, int]],
-    cpuid_1_eax: int,
-    cpuid_1_edx: int,
-    memory_device_size: int = 2 * TIB,
-) -> bytes:
-    """smbios_get_tables_ep for a q35 machine with ``-smp N`` (one socket, N cores)."""
-    # 255 cores already encodes as 0xFF ("see Core Count 2"), which SMBIOS 2.x
-    # cannot carry, so QEMU's auto entry point switches to SMBIOS 3.0.
-    if vcpus >= 0xFF:
+def check_entry_point(anchor: bytes) -> None:
+    # 255 or more cores per socket make QEMU's auto entry point switch to 3.0.
+    if not anchor.startswith(b"_SM_"):
         raise NotImplementedError(
-            "255 or more cores per socket use the SMBIOS 3.0 entry point"
+            "OVMF's handling of an SMBIOS 3.0 entry point is not modelled"
         )
-    out = [
-        _record(
-            1,
-            0x100,
-            struct.pack("<BBBB16sBBB", 1, 2, 3, 0, bytes(16), 0x06, 0, 0),
-            (QEMU_MANUFACTURER, Q35_DESCRIPTION, machine),
-        ),
-        _record(
-            3,
-            0x300,
-            struct.pack(
-                "<BBBBBBBBBIBBBBB", 1, 0x01, 2, 0, 0, 3, 3, 3, 2, 0, 0, 0, 0, 0, 0
-            ),
-            (QEMU_MANUFACTURER, machine),
-        ),
-        _record(
-            4,
-            0x400,
-            struct.pack(
-                "<BBBBIIBBHHHBBHHHBBBBBBHH",
-                1,
-                0x03,
-                0xFE,
-                2,
-                cpuid_1_eax,
-                cpuid_1_edx,
-                3,
-                0,
-                0,
-                2000,
-                2000,
-                0x41,
-                0x01,
-                0xFFFF,
-                0xFFFF,
-                0xFFFF,
-                0,
-                0,
-                0,
-                vcpus,
-                vcpus,
-                vcpus,
-                0x02,
-                0x01,
-            ),
-            ("CPU 0", QEMU_MANUFACTURER, machine),
-        ),
-    ]
 
-    dimms = -(-ram_bytes // memory_device_size)
-    size_kb = -(-ram_bytes // KIB)
-    max_capacity, ext_capacity = (
-        (size_kb, 0) if size_kb < 0x8000_0000 else (0x8000_0000, ram_bytes)
-    )
-    out.append(
-        _record(
-            16,
-            0x1000,
-            struct.pack(
-                "<BBBIHHQ", 0x01, 0x03, 0x06, max_capacity, 0xFFFE, dimms, ext_capacity
-            ),
-        )
-    )
-    for i in range(dimms):
-        size = (
-            memory_device_size
-            if i < dimms - 1
-            else (ram_bytes - 1) % memory_device_size + 1
-        )
-        size_mb = -(-size // MIB)
-        std, ext = (size_mb, 0) if size_mb < 0x7FFF else (0x7FFF, size_mb)
-        out.append(
-            _record(
-                17,
-                0x1100 + i,
-                struct.pack(
-                    "<HHHHHBBBBBHHBBBBBIHHHH",
-                    0x1000,
-                    0xFFFE,
-                    0xFFFF,
-                    0xFFFF,
-                    std,
-                    0x09,
-                    0,
-                    1,
-                    0,
-                    0x07,
-                    0x02,
-                    0,
-                    2,
-                    0,
-                    0,
-                    0,
-                    0,
-                    ext,
-                    0,
-                    0,
-                    0,
-                    0,
-                ),
-                (f"DIMM {i}", QEMU_MANUFACTURER),
-            )
-        )
-    offset = max(dimms - (0x1300 - 0x1100), 0)
-    for i, (start, length) in enumerate(e820_ram):
-        end = start + length - 1
-        if start // KIB < 0xFFFF_FFFF and end // KIB < 0xFFFF_FFFF:
-            fmt = struct.pack("<IIHBQQ", start // KIB, end // KIB, 0x1000, 1, 0, 0)
-        else:
-            fmt = struct.pack(
-                "<IIHBQQ", 0xFFFF_FFFF, 0xFFFF_FFFF, 0x1000, 1, start, end
-            )
-        out.append(_record(19, 0x1300 + offset + i, fmt))
-    out.append(_record(32, 0x2000, bytes(7)))
-    out.append(_record(127, 0x7F00, b""))
-    return b"".join(out)
+
+def with_processor_id(tables: bytes, cpuid_1_eax: int, cpuid_1_edx: int) -> bytes:
+    """QEMU copies its own CPUID leaf 1 into type 4; use the host's."""
+    out = bytearray(tables)
+    off = 0
+    while out[off] != 127:
+        if out[off] == 4:
+            struct.pack_into("<II", out, off + 8, cpuid_1_eax, cpuid_1_edx)
+        off = out.index(b"\0\0", off + out[off + 1]) + 2
+    return bytes(out)
 
 
 # OvmfPkg/SmbiosPlatformDxe mOvmfDefaultType0 with the default PCDs:

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,12 +31,11 @@ from ..tdx.uefi import (
     EFI_IMAGE_SECURITY_DATABASE_GUID,
     compute_variable_digest,
 )
-from . import acpi, pcialloc, smbios, tdhob
+from . import pcialloc, qemu, smbios, tdhob
 from .cmdline import kernel_cmdline
 from .config import KataConfig
 from .ovmf import boot_manager_menu_option
 from .platform import Platform
-from .qemu import q35_machine
 
 # QEMU fw_cfg "bootorder" for a -kernel boot: the linuxboot_dma option ROM only.
 _FW_CFG_BOOTORDER = b"/rom@genroms/linuxboot_dma.bin\0"
@@ -82,28 +82,43 @@ class KataTdxRegisters:
 
 
 def rtmr0_digests(
-    cfg: KataConfig, platform: Platform, guest: Guest, firmware: bytes, qemu: bytes
+    cfg: KataConfig,
+    platform: Platform,
+    guest: Guest,
+    firmware: bytes,
+    qemu_wrapper: Sequence[str] = (),
 ) -> list[bytes]:
     """The RTMR[0] events in the order OVMF measures them."""
     ram = guest.memory_mib << 20
-    e820 = tdhob.q35_e820_ram(ram)
-    first_non_address = max(a + n for a, n in e820)
+    first_non_address = max(a + n for a, n in tdhob.q35_e820_ram(ram))
     bits = pcialloc.ovmf_phys_bits(platform.phys_bits, platform.guest_phys_bits)
     window_base, window_size = pcialloc.mmio64_window(bits, first_non_address)
-    blobs = acpi.fw_cfg_blobs(
-        cfg,
-        guest,
+    hole64 = pcialloc.root_bus_mem64(
         window_base=window_base,
         window_size=window_size,
-        gpu_bars=platform.gpu_bars,
+        root_ports=[
+            list(platform.gpu_bars) if k < guest.gpus else []
+            for k in range(cfg.pcie_root_port)
+        ],
+        root_bus_bars=qemu.root_bus_virtio_bars(cfg),
     )
-    tables = smbios.qemu_tables(
-        machine=q35_machine(qemu),
-        vcpus=guest.vcpus,
-        ram_bytes=ram,
-        e820_ram=e820,
-        cpuid_1_eax=platform.cpuid_1_eax,
-        cpuid_1_edx=platform.cpuid_1_edx,
+    blobs = qemu.read_fw_cfg(
+        cfg,
+        guest,
+        hole64=hole64,
+        phys_bits=bits,
+        names=(
+            qemu.TABLE_LOADER,
+            qemu.ACPI_RSDP,
+            qemu.ACPI_TABLES,
+            qemu.SMBIOS_ANCHOR,
+            qemu.SMBIOS_TABLES,
+        ),
+        wrapper=qemu_wrapper,
+    )
+    smbios.check_entry_point(blobs[qemu.SMBIOS_ANCHOR])
+    tables = smbios.with_processor_id(
+        blobs[qemu.SMBIOS_TABLES], platform.cpuid_1_eax, platform.cpuid_1_edx
     )
 
     def sha384(data: bytes) -> bytes:
@@ -119,9 +134,9 @@ def rtmr0_digests(
             for guid, name in _SECURE_BOOT_VARIABLES
         ),
         SEPARATOR_DIGEST,
-        sha384(blobs.table_loader),
-        sha384(blobs.rsdp),
-        sha384(blobs.tables),
+        sha384(blobs[qemu.TABLE_LOADER]),
+        sha384(blobs[qemu.ACPI_RSDP]),
+        sha384(blobs[qemu.ACPI_TABLES]),
         smbios.handoff_digest(tables),
         sha384(_BOOT_ORDER),
         sha384(boot_manager_menu_option(firmware)),
@@ -148,20 +163,22 @@ def compute(
     platform: Platform,
     guest: Guest,
     initdata: Path | bytes | None = None,
+    qemu_wrapper: Sequence[str] = (),
 ) -> KataTdxRegisters:
     if cfg.initrd:
         raise NotImplementedError(
             "initrd boots measure an extra RTMR[2] event that is not modelled"
         )
     firmware = Path(cfg.firmware).read_bytes()
-    qemu = Path(cfg.qemu).read_bytes()
     kernel = Path(cfg.kernel).read_bytes()
     return KataTdxRegisters(
         mrtd=compute_mrtd(firmware).hex(),
         mrconfigid=(
             compute_digest(initdata) if initdata is not None else bytes(SHA384_SIZE)
         ).hex(),
-        rtmr0=replay_digests(rtmr0_digests(cfg, platform, guest, firmware, qemu)).hex(),
+        rtmr0=replay_digests(
+            rtmr0_digests(cfg, platform, guest, firmware, qemu_wrapper)
+        ).hex(),
         rtmr1=replay_digests(rtmr1_digests(kernel)).hex(),
         rtmr2=replay_digests(rtmr2_digests(kernel_cmdline(cfg))).hex(),
         rtmr3=bytes(SHA384_SIZE).hex(),

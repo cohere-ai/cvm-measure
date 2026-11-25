@@ -16,7 +16,10 @@
 
 Tests that read Kata release artifacts need KATA_TDX_ROOT set to a directory
 holding the extracted kata-static tarballs (the ``opt/kata`` tree) whose
-digests are recorded in the golden file.
+digests are recorded in the golden file. Tests that run its QEMU need a
+linux/amd64 host, or KATA_TDX_QEMU_WRAPPER set to a command prefix that runs
+the binary at the same path, for example
+``docker run --rm -i --platform linux/amd64 -v /data/kata:/data/kata:ro ubuntu:24.04``.
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform as host
+import shlex
 import shutil
 import struct
 import sys
@@ -32,9 +37,8 @@ from typing import Any
 
 import pytest
 
-from cvm_measure.kata_tdx import pcialloc, smbios, tdhob
+from cvm_measure.kata_tdx import pcialloc, qemu, tdhob
 from cvm_measure.kata_tdx.platform import Platform, load_platform
-from cvm_measure.kata_tdx.qemu import q35_machine
 
 from .conftest import FIXTURES_DIR
 
@@ -80,6 +84,14 @@ def kata_root() -> Path:
 
 
 @pytest.fixture(scope="module")
+def qemu_wrapper() -> list[str]:
+    wrapper = shlex.split(os.environ.get("KATA_TDX_QEMU_WRAPPER", ""))
+    if not wrapper and (sys.platform != "linux" or host.machine() != "x86_64"):
+        pytest.skip("Kata's QEMU needs linux/amd64 or KATA_TDX_QEMU_WRAPPER")
+    return wrapper
+
+
+@pytest.fixture(scope="module")
 def kata_config(kata_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
     if sys.version_info < (3, 11):
         pytest.skip("tomllib needs Python 3.11")
@@ -106,20 +118,6 @@ class TestPlatform:
             load_platform(tmp_path / "p.json")
 
 
-class TestQemuMachine:
-    def test_newest_q35_type_wins(self) -> None:
-        blob = b"\0pc-q35-10.2-machine\0\0pc-q35-11.0-machine\0\0pc-q35-9.1-machine\0"
-        assert q35_machine(blob) == "pc-q35-11.0"
-
-    def test_adjacent_type_names(self) -> None:
-        blob = b"\0pc-q35-9.1-machine\0pc-q35-11.0-machine\0pc-q35-10.2-machine\0"
-        assert q35_machine(blob) == "pc-q35-11.0"
-
-    def test_unmodelled_machine(self) -> None:
-        with pytest.raises(NotImplementedError):
-            q35_machine(b"\0pc-q35-11.1-machine\0")
-
-
 class TestE820:
     def test_split_above_lowmem(self) -> None:
         assert tdhob.q35_e820_ram(396032 << 20) == [
@@ -129,33 +127,6 @@ class TestE820:
 
     def test_small_guest(self) -> None:
         assert tdhob.q35_e820_ram(2 << 30) == [(0, 2 << 30)]
-
-
-@pytest.mark.parametrize("shape", SHAPES, ids=_shape_id)
-def test_smbios_handoff_digest(shape: dict[str, Any], platform: Platform) -> None:
-    ram = shape["memory_mib"] << 20
-    tables = smbios.qemu_tables(
-        machine="pc-q35-11.0",
-        vcpus=shape["vcpus"],
-        ram_bytes=ram,
-        e820_ram=tdhob.q35_e820_ram(ram),
-        cpuid_1_eax=platform.cpuid_1_eax,
-        cpuid_1_edx=platform.cpuid_1_edx,
-    )
-    assert smbios.handoff_digest(tables).hex() == shape["events"]["smbios"]
-
-
-@pytest.mark.parametrize("vcpus", [255, 256])
-def test_smbios_30_entry_point_unmodelled(vcpus: int, platform: Platform) -> None:
-    with pytest.raises(NotImplementedError, match="SMBIOS 3.0"):
-        smbios.qemu_tables(
-            machine="pc-q35-11.0",
-            vcpus=vcpus,
-            ram_bytes=8 << 30,
-            e820_ram=tdhob.q35_e820_ram(8 << 30),
-            cpuid_1_eax=platform.cpuid_1_eax,
-            cpuid_1_edx=platform.cpuid_1_edx,
-        )
 
 
 @pytest.mark.parametrize("shape", SHAPES, ids=_shape_id)
@@ -248,50 +219,81 @@ class TestCmdline:
 
 
 @pytest.mark.parametrize("shape", SHAPES, ids=_shape_id)
-def test_tdx_table(shape: dict[str, Any], kata_root: Path) -> None:
-    firmware = (kata_root / "opt/kata/share/ovmf/OVMF.inteltdx.fd").read_bytes()
-    assert (
-        tdhob.tdx_table_digest(firmware, shape["memory_mib"] << 20).hex()
-        == shape["events"]["tdx_table"]
+def test_rtmr0_events(
+    shape: dict[str, Any],
+    kata_config: Path,
+    kata_root: Path,
+    platform: Platform,
+    qemu_wrapper: list[str],
+) -> None:
+    from cvm_measure.kata_tdx.config import load_config
+    from cvm_measure.kata_tdx.registers import Guest, rtmr0_digests
+
+    cfg = load_config(kata_config, root=kata_root)
+    digests = rtmr0_digests(
+        cfg,
+        platform,
+        Guest(shape["vcpus"], shape["memory_mib"], shape["gpus"]),
+        Path(cfg.firmware).read_bytes(),
+        qemu_wrapper,
     )
+    measured = dict(zip(RTMR0_EVENTS, (d.hex() for d in digests)))
+    assert {n: measured[n] for n in shape["events"]} == shape["events"]
 
 
-@needs_tomllib
-@pytest.mark.parametrize("shape", SHAPES, ids=_shape_id)
-def test_acpi_blobs(shape: dict[str, Any], tmp_path: Path, platform: Platform) -> None:
-    from cvm_measure.kata_tdx import acpi
+# Memory on both sides of q35's 2.75 GiB lowmem rule, and past one 2 TiB SMBIOS DIMM.
+@pytest.mark.parametrize(
+    "memory_mib", [2048, 2815, 2816, 4097, 4608, (2 << 20) + 512, 3 << 20]
+)
+def test_e820_matches_qemu(
+    memory_mib: int,
+    kata_config: Path,
+    kata_root: Path,
+    platform: Platform,
+    qemu_wrapper: list[str],
+) -> None:
     from cvm_measure.kata_tdx.config import load_config
     from cvm_measure.kata_tdx.registers import Guest
 
-    config = tmp_path / "configuration.toml"
-    config.write_text(
-        '[hypervisor.qemu]\npath = "/qemu"\nfirmware = "/ovmf.fd"\nkernel = "/vmlinuz"\nimage = "/rootfs.img"\n'
-        'vm_rootfs_driver = "virtio-blk-pci"\nblock_device_driver = "virtio-scsi"\nshared_fs = "none"\n'
-        'entropy_source = "/dev/urandom"\ndefault_bridges = 1\ncold_plug_vfio = "root-port"\npcie_root_port = 8\n'
-        '[[hypervisor.qemu.guest_extension_images]]\nname = "gpu"\npath = "/gpu.img"\n'
-        '[[hypervisor.qemu.guest_extension_images]]\nname = "coco"\npath = "/coco.img"\n'
-    )
-    ram = shape["memory_mib"] << 20
-    bits = pcialloc.ovmf_phys_bits(platform.phys_bits, platform.guest_phys_bits)
-    base, size = pcialloc.mmio64_window(
-        bits, max(a + n for a, n in tdhob.q35_e820_ram(ram))
-    )
-    blobs = acpi.fw_cfg_blobs(
-        load_config(config),
-        Guest(shape["vcpus"], shape["memory_mib"], shape["gpus"]),
-        window_base=base,
-        window_size=size,
-        gpu_bars=platform.gpu_bars,
-    )
-    events = shape["events"]
-    assert hashlib.sha384(blobs.table_loader).hexdigest() == events["table_loader"]
-    assert hashlib.sha384(blobs.rsdp).hexdigest() == events["rsdp"]
-    assert hashlib.sha384(blobs.tables).hexdigest() == events["acpi_tables"]
+    cfg = load_config(kata_config, root=kata_root)
+    raw = qemu.read_fw_cfg(
+        cfg,
+        Guest(vcpus=4, memory_mib=memory_mib, gpus=1),
+        hole64=(0x3800_0000_0000, B200_HOLE64_END[1]),
+        phys_bits=46,
+        names=(qemu.E820,),
+        wrapper=qemu_wrapper,
+    )[qemu.E820]
+    entries = (struct.unpack_from("<QQI", raw, o) for o in range(0, len(raw), 20))
+    assert tdhob.q35_e820_ram(memory_mib << 20) == [
+        (addr, length) for addr, length, kind in entries if kind == 1
+    ]
+
+
+def test_smbios_30_entry_point_unmodelled(
+    kata_config: Path, kata_root: Path, platform: Platform, qemu_wrapper: list[str]
+) -> None:
+    from cvm_measure.kata_tdx.config import load_config
+    from cvm_measure.kata_tdx.registers import Guest, rtmr0_digests
+
+    cfg = load_config(kata_config, root=kata_root)
+    with pytest.raises(NotImplementedError, match="SMBIOS 3.0"):
+        rtmr0_digests(
+            cfg,
+            platform,
+            Guest(vcpus=255, memory_mib=8192, gpus=1),
+            Path(cfg.firmware).read_bytes(),
+            qemu_wrapper,
+        )
 
 
 @pytest.mark.parametrize("shape", SHAPES, ids=_shape_id)
 def test_registers(
-    shape: dict[str, Any], kata_config: Path, kata_root: Path, platform: Platform
+    shape: dict[str, Any],
+    kata_config: Path,
+    kata_root: Path,
+    platform: Platform,
+    qemu_wrapper: list[str],
 ) -> None:
     from cvm_measure.kata_tdx.config import load_config
     from cvm_measure.kata_tdx.registers import Guest, compute
@@ -301,6 +303,7 @@ def test_registers(
         platform,
         Guest(shape["vcpus"], shape["memory_mib"], shape["gpus"]),
         initdata=FIXTURES_DIR / "initdata" / GOLDEN["initdata"],
+        qemu_wrapper=qemu_wrapper,
     )
     assert regs.as_dict() == {
         "mrtd": GOLDEN["mrtd"],
@@ -370,6 +373,7 @@ def test_input_changes_only_its_events(
     kata_config: Path,
     kata_root: Path,
     platform: Platform,
+    qemu_wrapper: list[str],
 ) -> None:
     from dataclasses import replace
 
@@ -377,15 +381,15 @@ def test_input_changes_only_its_events(
     from cvm_measure.kata_tdx.registers import Guest, rtmr0_digests
 
     cfg = load_config(kata_config, root=kata_root)
-    firmware, qemu = (Path(p).read_bytes() for p in (cfg.firmware, cfg.qemu))
+    firmware = Path(cfg.firmware).read_bytes()
     base = Guest(vcpus=3, memory_mib=4608, gpus=1)
-    before = rtmr0_digests(cfg, platform, base, firmware, qemu)
+    before = rtmr0_digests(cfg, platform, base, firmware, qemu_wrapper)
     after = rtmr0_digests(
         cfg,
         replace(platform, **platform_change),
         replace(base, **guest_change),
         firmware,
-        qemu,
+        qemu_wrapper,
     )
     assert len(before) == len(after) == len(RTMR0_EVENTS)
     changed = {n for n, a, b in zip(RTMR0_EVENTS, before, after) if a != b}
@@ -393,7 +397,10 @@ def test_input_changes_only_its_events(
 
 
 def test_cli(
-    kata_config: Path, kata_root: Path, capsys: pytest.CaptureFixture[str]
+    kata_config: Path,
+    kata_root: Path,
+    qemu_wrapper: list[str],
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from cvm_measure.cli import main
 
@@ -415,6 +422,8 @@ def test_cli(
             str(shape["gpus"]),
             "--initdata",
             str(FIXTURES_DIR / "initdata" / GOLDEN["initdata"]),
+            "--qemu-wrapper",
+            shlex.join(qemu_wrapper),
             "--output-format",
             "json",
         ]
