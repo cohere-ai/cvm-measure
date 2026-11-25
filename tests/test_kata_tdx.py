@@ -105,6 +105,10 @@ class TestQemuMachine:
         blob = b"\0pc-q35-10.2-machine\0\0pc-q35-11.0-machine\0\0pc-q35-9.1-machine\0"
         assert q35_machine(blob) == "pc-q35-11.0"
 
+    def test_adjacent_type_names(self) -> None:
+        blob = b"\0pc-q35-9.1-machine\0pc-q35-11.0-machine\0pc-q35-10.2-machine\0"
+        assert q35_machine(blob) == "pc-q35-11.0"
+
     def test_unmodelled_machine(self) -> None:
         with pytest.raises(NotImplementedError):
             q35_machine(b"\0pc-q35-11.1-machine\0")

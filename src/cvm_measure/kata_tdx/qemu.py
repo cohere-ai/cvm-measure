@@ -26,7 +26,9 @@ def q35_machine(qemu: bytes) -> str:
     """The versioned machine that ``-machine q35`` resolves to: the newest pc-q35 QOM type."""
     versions = {
         (int(major), int(minor))
-        for major, minor in re.findall(rb"\0pc-q35-(\d+)\.(\d+)-machine\0", qemu)
+        for major, minor in re.findall(
+            rb"(?<=\0)pc-q35-(\d+)\.(\d+)-machine(?=\0)", qemu
+        )
     }
     if not versions:
         raise ValueError("QEMU binary defines no pc-q35 machine types")
